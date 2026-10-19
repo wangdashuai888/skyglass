@@ -270,13 +270,23 @@ static void adsb_task(void*) {
             healStage = 0;
             healActionMs = 0;
         } else {
+            // Any HTTP reply proves the network works, including 403/429. Deliberate
+            // provider parks must not trigger reconnects or reset their backoff via reboot.
+            const uint32_t recoveryNow = millis();
+            const uint32_t answeredMs = g_adsb.lastResponseMs();
+            if (g_adsb.allParked() ||
+                (answeredMs && recoveryNow - answeredMs < recoveryNow - lastFeedOk)) {
+                lastFeedOk = recoveryNow;
+                healStage = 0;
+                healActionMs = 0;
+            }
             const uint32_t stuckMs = millis() - lastFeedOk;
-            if (stuckMs > 180000UL) {
+            if (!g_adsb.lastPollSkipped() && stuckMs > 180000UL) {
                 Serial.println("[adsb] feed stuck >180s after reassociating -> rebooting");
                 delay(100);
                 esp_rom_printf("\n*** RESTART: feed stuck >180s after reassociating ***\n");
                 ESP.restart();
-            } else if (stuckMs > 45000UL && healStage < 1) {
+            } else if (!g_adsb.lastPollSkipped() && stuckMs > 45000UL && healStage < 1) {
                 // Cheapest rung: reassociate. Costs a second or two of link and nothing
                 // else, and on the P4 it is observed to return within a few seconds.
                 Serial.println("[adsb] feed stuck >45s -> reassociating");
@@ -302,7 +312,7 @@ static void adsb_task(void*) {
                 // poll() tries the fallback provider after a primary failure; keep the HUD
                 // healthy through isolated misses and warn only after a sustained outage.
                 if (g_adsb.poll(fresh)) {
-                    Serial.printf("[adsb] fetched %u aircraft\n", (unsigned)fresh.size());
+                    Serial.printf("[adsb] fetched %u aircraft from %s\n", (unsigned)fresh.size(), g_adsb.lastHost());
                     ui_set_feed_source(g_adsb.lastPollWasLocal() ? 1 : 0);
                     failCount = 0;
                     g_feedOk = true;
@@ -345,6 +355,9 @@ static void adsb_task(void*) {
                             xSemaphoreGive(g_ac_mutex);
                         }
                     }
+                } else if (g_adsb.lastPollSkipped()) {
+                    // No request was due. Keep data freshness separate from network health.
+                    if (millis() - g_adsb.lastOkMs() > ADSB_FEED_STALE_MS) g_feedOk = false;
                 } else {
                     Serial.println("[adsb] poll failed");
                     if (++failCount >= 5) g_feedOk = false;   // sustained outage -> HUD warning

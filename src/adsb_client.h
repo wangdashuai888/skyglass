@@ -1,5 +1,5 @@
 #pragma once
-// Fetches nearby aircraft from airplanes.live (fallback adsb.lol) and parses
+// Fetches nearby aircraft from local receivers or airplanes.live / adsb.fi / adsb.lol and parses
 // the readsb JSON into a vector<Aircraft>. See docs/DATA_SOURCE.md.
 #include <vector>
 #include <WiFi.h>
@@ -7,6 +7,7 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include "aircraft.h"
+#include "adsb_pacing.h"
 
 class AdsbClient {
 public:
@@ -15,7 +16,6 @@ public:
     // empty for no visible reason -- /diag reports both so the disagreement is checkable.
     double queryLat() const { return _lat; }
     double queryLon() const { return _lon; }
-    ~AdsbClient() { _http.end(); }
     void begin(double homeLat, double homeLon, float rangeKm);
     void setHome(double lat, double lon) { _lat = lat; _lon = lon; }
     void setRange(float km) { _rangeKm = km; }
@@ -40,11 +40,16 @@ public:
     bool poll(std::vector<Aircraft>& out);
 
     uint32_t lastOkMs() const { return _lastOkMs; }
+    bool lastPollSkipped() const { return _lastPollSkipped; }
+    uint32_t lastResponseMs() const { return _lastResponseMs; }
+    const char* lastHost() const { return _lastHost.c_str(); }
+    // Local-only mode must never inherit public-provider cooldowns.
+    bool allParked() const { return _srcMode != 1 && _pacer.allParked(millis()); }
 
 private:
     // One host, one attempt. `local` swaps the HTTPS point-query for a plain-HTTP
     // fetch of the receiver's aircraft.json.
-    bool fetchFrom(const char* host, std::vector<Aircraft>& out, bool local = false);
+    bool fetchFrom(const char* host, std::vector<Aircraft>& out, bool local = false, int slot = -1);
 
     double _lat = 0, _lon = 0;
     float  _rangeKm = 15.0f;
@@ -53,10 +58,10 @@ private:
     bool   _milOnly = false;
     uint32_t _lastOkMs = 0;
 
-    WiFiClientSecure _client;
-    WiFiClient       _plain;          // local receiver: no TLS, it is on your own LAN
-    HTTPClient _http;
-    const char* _lastHost = nullptr;
+    AdsbPacer _pacer;
+    bool _lastPollSkipped = false;
+    uint32_t _lastResponseMs = 0;
+    String _lastHost;
     String _localHost;
     int    _srcMode = 0;
     bool   _lastWasLocal = false;

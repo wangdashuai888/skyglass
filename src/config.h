@@ -61,6 +61,8 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 
 // ---------- ADS-B API (free, non-commercial) ----------
 #define ADSB_PRIMARY_HOST   "api.airplanes.live"   // GET /v2/point/{lat}/{lon}/{radius_nm}
+#define ADSB_OPENDATA_HOST  "opendata.adsb.fi"
+#define ADSB_PROVIDER_COUNT 3
 #define ADSB_FALLBACK_HOST  "api.adsb.lol"          // same readsb format
 // A dump1090 / readsb / tar1090 receiver on your own network, set from the config page
 // (blank = use the public feeds). This is the path every one of those serves the decoded
@@ -68,6 +70,15 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 #define ADSB_LOCAL_PATH     "/tar1090/data/aircraft.json"
 #define ADSB_USER_AGENT     "SkyGlass/" FW_VERSION " (hobby; +https://github.com/SilentWolf75/skyglass)"
 #define ADSB_HTTPS_INSECURE 1               // 1 = setInsecure() (hobby). 0 = use pinned root CA.
+// Independent public-provider pacing; local receiver requests are not paced.
+#define TLS_HANDSHAKE_S             10
+#define ADSB_COOLDOWN_403_MS        900000UL
+#define ADSB_COOLDOWN_403_MAX_MS    21600000UL
+#define ADSB_SPACING_STEP_MS        4000UL
+#define ADSB_SPACING_MAX_MS         60000UL
+#define ADSB_SPACING_EASE_OKS        3
+#define ADSB_SILENCE_OUTAGE_MAX_MS   10000UL
+#define ADSB_FEED_STALE_MS          60000UL
 // Rows the contact list will build. Bounded because each row is LVGL pool memory and
 // the pool is fixed; the list is nearest-first so the cap keeps the contacts that matter.
 // Measured on hardware at ~437 bytes per row, so the cap is worth ~10.5 KB of pool. At
@@ -81,10 +92,6 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 #endif
 
 #define ADSB_MAX_AIRCRAFT   120             // hard cap parsed per poll (protect RAM in busy areas)
-// When the primary feed answers cleanly but with zero aircraft, re-probe the fallback
-// only every Nth poll. An empty sky is normal and can last hours; see AdsbClient::poll.
-#define ADSB_EMPTY_RECHECK_POLLS 30         // 30 x POLL_INTERVAL_MS = ~1 min while empty
-
 // ---------- Self-update (GitHub Pages, published by the web-flasher workflow) ----------
 // The workflow stamps manifest.json with FW_VERSION and publishes firmware.bin beside
 // it, so the device can compare versions and pull the image itself. Point these at your
