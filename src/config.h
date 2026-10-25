@@ -96,8 +96,8 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 // The workflow stamps manifest.json with FW_VERSION and publishes firmware.bin beside
 // it, so the device can compare versions and pull the image itself. Point these at your
 // own fork's Pages site if you republish.
-#define UPDATE_MANIFEST_URL  "https://silentwolf75.github.io/skyglass/manifest.json"
-#define UPDATE_FIRMWARE_URL  "https://silentwolf75.github.io/skyglass/firmware.bin"
+#define UPDATE_MANIFEST_URL  "https://wangdashuai888.github.io/skyglass/manifest.json"
+#define UPDATE_FIRMWARE_URL  "https://wangdashuai888.github.io/skyglass/firmware.bin"
 #define UPDATE_CHECK_INTERVAL_MS 21600000UL   // 6 h; releases are not that frequent
 
 // ---------- Debug ----------

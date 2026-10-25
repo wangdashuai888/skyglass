@@ -69,7 +69,7 @@ jobs:
             **ESP32-P4-WIFI6-Touch-LCD-4C** (720×720).
 
             **First flash (USB)** — the browser installer detects which board you have
-            and writes the matching build: https://silentwolf75.github.io/skyglass/
+            and writes the matching build: https://wangdashuai888.github.io/skyglass/
 
             Or with esptool, using the merged image for your board:
             - S3: `esptool.py --chip esp32s3 write_flash 0x0 SkyGlass-esp32s3.bin`

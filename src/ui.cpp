@@ -1356,7 +1356,7 @@ static void build_about(void) {
              "#63D8FF FEED#    airplanes.live / adsb.fi / adsb.lol\n"
              // OSM tiles are ODbL: attribution is a licence condition, not a courtesy.
              "#63D8FF MAP#     (c) OpenStreetMap contributors\n"
-             "#9AFFC8 github.com/SilentWolf75/skyglass#\n"
+             "#9AFFC8 github.com/wangdashuai888/skyglass#\n"
              "#5F7A6C MIT : fork of socquique/capsule-radar#",
              __DATE__, BOARD_NAME, ESP.getChipModel(),
              (unsigned)(ESP.getPsramSize() / (1024 * 1024)),
