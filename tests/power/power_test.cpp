@@ -5,14 +5,14 @@
 #include "Wire.h"
 int main() {
     using S = PowerState;
-    assert(power_boot_state(S::Running, true) == S::Running); // flashing is never activation
-    assert(power_boot_state(S::ShipWaiting, true) == S::ShipWaiting); // reboot while packing
-    assert(power_boot_state(S::ShipOff, false) == S::ShipOff); // battery wake stays locked
-    assert(power_boot_state(S::ShipOff, true) == S::Running); // customer connects USB
+    assert(power_decode(0) == S::Running);
+    assert(power_decode(1) == S::StopWaiting); // migrate formerly armed shipping mode
+    assert(power_decode(2) == S::StopOff);
+    assert(power_decode(255) == S::Running);
+    assert(power_boot_state(S::Running, true) == S::Running);
     assert(power_boot_state(S::StopWaiting, true) == S::StopWaiting);
     assert(power_boot_state(S::StopOff, false) == S::StopOff);
     assert(power_boot_state(S::StopOff, true) == S::Running);
-    assert(power_off_target(S::ShipWaiting) == S::ShipOff);
     assert(power_off_target(S::StopWaiting) == S::StopOff);
     bool usb = true;
     assert(!battery_usb_present(usb)); // no PMIC init -> no shutdown
@@ -32,5 +32,5 @@ int main() {
     assert(battery_shutdown());
     assert(Wire.regs[0x12] == 0xA3); // only off-state BATFET bit changed
     assert(Wire.regs[0x10] == 0xA1); // soft power-off; other configuration preserved
-    puts("PASS: shipping/shutdown boot states, USB interlock, I2C failures, PMIC register writes");
+    puts("PASS: shutdown boot states and legacy migration, USB interlock, I2C failures, PMIC register writes");
 }

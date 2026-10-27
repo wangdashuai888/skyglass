@@ -18,6 +18,8 @@ void setBrightness(uint8_t v);
 
 // ms since the last touch (LVGL inactivity timer) — for idle auto-dim.
 uint32_t inactiveMs();
+// S3: filter raw contacts before LVGL gestures; true consumes the wake touch.
+void setTouchFilter(bool (*filter)(bool pressed));
 const uint16_t *captureFrame();   // full-screen RGB565 snapshot (SCREEN_W*SCREEN_H), or nullptr
 
 // Rotate the whole UI clockwise by an arbitrary number of degrees (normalized to

@@ -101,9 +101,11 @@ static void power_confirm(lv_event_t *e) {
     close_power_dialog();
     const UiPowerAction action = (UiPowerAction)(intptr_t)lv_event_get_user_data(e);
     static const char *buttons[] = { "Continue", "Cancel", "" };
-    const char *message = action == UI_POWER_SHIPPING
-        ? "Prepare for shipping? Unplug USB when asked. The next USB connection wakes SkyGlass. Settings are kept."
-        : "Shut down? If USB is connected, unplug it when asked. Reconnect USB to wake SkyGlass.";
+    if (action != UI_POWER_SHUTDOWN) {
+        if (s_powerCallback) s_powerCallback(action);
+        return;
+    }
+    const char *message = "Shut down? If USB is connected, unplug it when asked. Reconnect USB to wake SkyGlass.";
     s_powerDialog = lv_msgbox_create(nullptr, "Power", message, buttons, false);
     lv_obj_set_width(s_powerDialog, UI_S(300)); lv_obj_center(s_powerDialog);
     lv_obj_add_event_cb(s_powerDialog, [](lv_event_t *event) {
@@ -2190,7 +2192,7 @@ void ui_create(void) {
     }
 
     if (s_powerCallback) {
-        for (int i = 0; i < 2; ++i) {
+        for (int i = 0; i < 3; ++i) {
             lv_obj_t *btn = lv_btn_create(box);
             lv_obj_add_style(btn, &stPill, 0);
             lv_obj_set_size(btn, UI_S(280), UI_S(34));
@@ -2198,7 +2200,7 @@ void ui_create(void) {
             lv_obj_add_event_cb(btn, power_confirm, LV_EVENT_CLICKED, (void *)(intptr_t)i);
             lv_obj_t *label = lv_label_create(btn);
             lv_obj_set_style_text_font(label, F14(), 0);
-            lv_label_set_text(label, i ? "PREPARE FOR SHIPPING" : "SHUT DOWN");
+            lv_label_set_text(label, i == 0 ? "SHUT DOWN" : i == 1 ? "NORMAL SLEEP" : "DEEP SLEEP");
             lv_obj_center(label);
         }
     }

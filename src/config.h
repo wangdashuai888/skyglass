@@ -108,3 +108,9 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 #define POWER_USB_ABSENT_MS     500U
 #define POWER_REQUEST_GRACE_MS 1500U
 #define POWER_OFF_VERIFY_MS   1000U
+
+// Touch-wake sleep is opt-in. Seconds are stored in NVS and converted to milliseconds.
+#define NORMAL_SLEEP_DEFAULT_SEC 0U
+#define DEEP_SLEEP_DEFAULT_SEC   0U
+#define SLEEP_WAKE_GRACE_MS   15000U
+#define SLEEP_FEED_PARK_MS      100U

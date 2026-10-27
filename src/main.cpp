@@ -33,6 +33,8 @@
 #include "imu_qmi8658.h"             // face-down sleep
 #include "gps.h"                     // LC76G GNSS (-G variant only)
 #include "power_policy.h"
+#include "sleep_policy.h"
+#include <atomic>
 #include <Wire.h>
 #include "battery.h"                 // AXP2101 battery gauge
 #include "rtc_pcf85063.h"            // PCF85063 RTC (offline clock + date)
@@ -55,6 +57,14 @@
 #include <nvs.h>                    // erase the driver's "nvs.net80211" namespace (WiFi reset)
 
 // ---- shared state ----
+// Core 1 owns sleep/UI state; core 0 only reads this atomic request flag.
+static std::atomic<bool> g_deepSleep{false};
+#if BOARD_HAS_PMIC
+static SleepPolicy g_sleep;
+static SleepMode g_sleepApplied = SleepMode::Awake;
+static bool g_sleepWakeGrace = false;
+static uint32_t g_sleepWokeAt = 0;
+#endif
 static std::vector<Aircraft> g_aircraft;      // latest snapshot
 static SemaphoreHandle_t     g_ac_mutex;      // guards g_aircraft
 static volatile bool         g_acDirty = false; // set when a new snapshot is ready
@@ -234,6 +244,12 @@ static void adsb_task(void*) {
     uint8_t  healStage = 0;                  // 0 none, 1 reassociate attempted
     uint32_t healActionMs = 0;               // when the last rung ran (see the !conn reset)
     for (;;) {
+        if (g_deepSleep.load()) {
+            lastFeedOk = millis(); healStage = 0; healActionMs = 0;
+            lastPoll = 0; // refresh promptly on wake; provider cooldowns remain intact
+            vTaskDelay(pdMS_TO_TICKS(SLEEP_FEED_PARK_MS));
+            continue;
+        }
         const bool conn = (WiFi.status() == WL_CONNECTED);
         if (conn && !wasConnected) {
             // disable WiFi modem power-save: on a mains-powered desk gadget it just adds latency
@@ -313,7 +329,9 @@ static void adsb_task(void*) {
                 static int failCount = 0;
                 // poll() tries the fallback provider after a primary failure; keep the HUD
                 // healthy through isolated misses and warn only after a sustained outage.
-                if (g_adsb.poll(fresh)) {
+                const bool fetched = g_adsb.poll(fresh);
+                if (g_deepSleep.load()) continue; // an already-running request may finish
+                if (fetched) {
                     Serial.printf("[adsb] fetched %u aircraft from %s\n", (unsigned)fresh.size(), g_adsb.lastHost());
                     ui_set_feed_source(g_adsb.lastPollWasLocal() ? 1 : 0);
                     failCount = 0;
@@ -365,6 +383,7 @@ static void adsb_task(void*) {
                     if (++failCount >= 5) g_feedOk = false;   // sustained outage -> HUD warning
                 }
             }
+            if (g_deepSleep.load()) continue;
             // Forecasts change slowly. Fetch only after the live ADS-B poll has had priority.
             if ((int32_t)(nowMs - nextWeatherAt) >= 0) {
                 Serial.printf("[weather] fetching %.5f, %.5f...\n",
@@ -380,6 +399,7 @@ static void adsb_task(void*) {
                     Serial.println("[weather] fetch failed; retrying in 60s");
                 }
             }
+            if (g_deepSleep.load()) continue;
             if (g_wxRefetch) { g_wxRefetch = false; nextWxRadarAt = nowMs; }
             if ((int32_t)(nowMs - nextWxRadarAt) >= 0) {
                 if (wx_radar_fetch(g_settings.homeLat, g_settings.homeLon)) {
@@ -397,6 +417,7 @@ static void adsb_task(void*) {
                     Serial.println("[wxradar] fetch failed; retrying in 60s");
                 }
             }
+            if (g_deepSleep.load()) continue;
             if ((int32_t)(nowMs - nextCloudImageAt) >= 0) {
                 Serial.println("[clouds] fetching EUMETSAT frame...");
                 if (cloud_image_fetch(g_settings.homeLat, g_settings.homeLon)) {
@@ -407,12 +428,14 @@ static void adsb_task(void*) {
                     Serial.println("[clouds] fetch failed; retrying in 60s");
                 }
             }
+            if (g_deepSleep.load()) continue;
             // AIS: non-blocking socket pump; also keeps the subscription box in sync
             // with the scope as the range or home position changes.
             if (ais_has_key()) {
                 ais_configure(g_settings.homeLat, g_settings.homeLon, queryRadiusKm());
                 ais_loop();
             }
+            if (g_deepSleep.load()) continue;
             // Map background: one tile per iteration, so a 9-16 tile build never blocks
             // the live feed. Returns true while more work remains.
             if (map_client_enabled()) {
@@ -424,6 +447,7 @@ static void adsb_task(void*) {
                 if (mapWasBusy && !busy) g_mapDirty = true;
                 mapWasBusy = busy;
             }
+            if (g_deepSleep.load()) continue;
             // Then the on-demand lookups for the selected aircraft. Their timeouts are kept
             // short (see photo_client / route_client) so a slow photo server can't freeze the
             // feed for long; the next loop iteration polls again as soon as they return.
@@ -443,12 +467,14 @@ static void adsb_task(void*) {
                     Serial.printf("[route] %s: no route\n", wantCall);
                 }
             }
+            if (g_deepSleep.load()) continue;
             char wantHex[10];
             if (photo_pending(wantHex, sizeof(wantHex))) photo_fetch(wantHex);
             // Continental fire map (FIRES screen). Fetch + banded parse; returns
             // true while busy so the UI can repaint on the busy->idle edge.
             // Self-update. Deliberately last in the task: a check is cheap but an
             // install streams 3 MB, and the live feed should have had its turn first.
+            if (g_deepSleep.load()) continue;
             updater_poll();
             char wantReg[10];
             if (reg_pending(wantReg, sizeof(wantReg))) {
@@ -535,7 +561,7 @@ static void loadSettings() {
 // Audio alerts. g_alertMode: 0 = off, 1 = emergencies only, 2 = new aircraft + emergencies.
 // g_proximityKm > 0 also pings (once) when any aircraft crosses into that radius.
 static void checkAudioEvents() {
-    if (!audio_present()) return;
+    if (!audio_present() || g_deepSleep.load()) return;
     static std::set<std::string> seen, seenProx;
     static bool first = true;
     static uint32_t lastNew = 0;
@@ -649,6 +675,11 @@ static void applyBrightness() {
         else if (BRIGHTNESS_IDLE < b) b = BRIGHTNESS_IDLE;       // dim / clock modes
     }
     if (g_asleep) b = 0;                                         // face-down -> screen off
+#if BOARD_HAS_PMIC
+    // Touch-wake takes priority over face-down/quiet-hours for a short grace period.
+    if (g_sleepWakeGrace && millis() - g_sleepWokeAt < SLEEP_WAKE_GRACE_MS) b = g_brightnessDay;
+    if (g_sleep.mode != SleepMode::Awake) b = 0;
+#endif
     display::setBrightness(b);
 }
 
@@ -659,7 +690,7 @@ static WebServer g_web(80);
 static PowerState g_powerState = PowerState::Running;
 static bool g_powerReady = false, g_powerNotify = false, g_powerAttempted = false;
 static uint32_t g_powerRequestedAt = 0, g_powerNoUsbAt = 0, g_powerPollAt = 0;
-static const char *g_powerMessage = "Reconnect USB to wake SkyGlass after shutdown.";
+static const char *g_powerMessage = "Choose a sleep mode, configure timeouts, or shut down.";
 
 static bool savePowerState(PowerState state) {
     Preferences p;
@@ -675,7 +706,68 @@ static void powerFailure(const char *message) {
     g_powerReady = false;
     g_powerMessage = message; g_powerNotify = true;
 }
+static void syncSleep() {
+    if (g_sleep.mode == g_sleepApplied) return;
+    const bool wasSleeping = g_sleepApplied != SleepMode::Awake;
+    g_sleepApplied = g_sleep.mode;
+    g_powerMessage = g_sleep.mode == SleepMode::Deep ? "Deep sleep. Touch the screen or use Wake up to resume."
+                   : g_sleep.mode == SleepMode::Normal ? "Normal sleep. Touch the screen or use Wake up to resume."
+                   : "SkyGlass is awake.";
+    g_deepSleep.store(g_sleep.mode == SleepMode::Deep);
+    radar::setStillMode(g_sleep.mode == SleepMode::Deep);
+    if (wasSleeping && g_sleep.mode == SleepMode::Awake) {
+        g_sleepWakeGrace = true; g_sleepWokeAt = millis();
+        lv_disp_trig_activity(nullptr);
+        g_idle = false;
+    }
+    applyBrightness();
+}
+static bool sleepTouchFilter(bool pressed) {
+    const bool consumed = g_sleep.touch(pressed, millis());
+    syncSleep();
+    return consumed;
+}
+static void loadSleepSettings() {
+    struct Timeouts { uint32_t normal, deep; } value{NORMAL_SLEEP_DEFAULT_SEC, DEEP_SLEEP_DEFAULT_SEC};
+    Preferences p;
+    if (p.begin("skyglass-sleep", false)) {
+        if (p.getBytesLength("timeouts") == sizeof(value)) p.getBytes("timeouts", &value, sizeof(value));
+        p.end();
+    }
+    if (!sleep_timeouts_valid(value.normal, value.deep)) value = {0, 0};
+    g_sleep.normalMs = value.normal * 1000U; g_sleep.deepMs = value.deep * 1000U;
+    g_sleep.wake(millis());
+}
+static void sleepTick() {
+    if (!power_waiting(g_powerState)) g_sleep.tick(millis());
+    syncSleep();
+    if (g_sleepWakeGrace && millis() - g_sleepWokeAt >= SLEEP_WAKE_GRACE_MS) {
+        g_sleepWakeGrace = false; applyBrightness();
+    }
+}
+static bool parseSleepMinutes(const String &text, uint32_t &seconds) {
+    if (text.isEmpty() || text.length() > 4) return false;
+    uint32_t value = 0;
+    for (unsigned int i = 0; i < text.length(); ++i) {
+        if (text[i] < '0' || text[i] > '9') return false;
+        value = value * 10 + (text[i] - '0');
+    }
+    if (value > 1440) return false;
+    seconds = value * 60; return true;
+}
 static bool requestPower(UiPowerAction action) {
+    if (action == UI_POWER_NORMAL_SLEEP || action == UI_POWER_DEEP_SLEEP || action == UI_POWER_WAKE) {
+        if (power_waiting(g_powerState)) {
+            g_powerMessage = "Cancel pending shutdown before selecting sleep.";
+            g_powerNotify = true; return false;
+        }
+        g_sleep.enter(action == UI_POWER_NORMAL_SLEEP ? SleepMode::Normal :
+                      action == UI_POWER_DEEP_SLEEP ? SleepMode::Deep : SleepMode::Awake, millis());
+        syncSleep();
+        return true;
+    }
+    // Keep the pending-shutdown/cancel instructions visible and resume the feed.
+    g_sleep.wake(millis()); syncSleep();
     if (action == UI_POWER_CANCEL) {
         if (!savePowerState(PowerState::Running)) {
             g_powerReady = false;
@@ -692,10 +784,6 @@ static bool requestPower(UiPowerAction action) {
         g_powerNotify = true; return false;
     }
     if (!battery_present()) {
-        if (action == UI_POWER_SHIPPING) {
-            g_powerMessage = "Connect a battery before preparing for shipping.";
-            g_powerNotify = true; return false;
-        }
         // USB-only units lose power before a disconnect can be observed or saved.
         if (!savePowerState(PowerState::Running)) {
             g_powerMessage = "Could not clear power state. Keep USB connected and retry.";
@@ -704,7 +792,7 @@ static bool requestPower(UiPowerAction action) {
         g_powerMessage = "No battery connected. Unplug USB to turn off; reconnect USB to turn on.";
         g_powerNotify = true; return true;
     }
-    if (!savePowerState(action == UI_POWER_SHIPPING ? PowerState::ShipWaiting : PowerState::StopWaiting)) {
+    if (!savePowerState(PowerState::StopWaiting)) {
         g_powerMessage = "Could not save power state. Shutdown was not armed.";
         g_powerNotify = true; return false;
     }
@@ -722,7 +810,7 @@ static void powerBoot() {
     // Open read/write so a new, unprovisioned board gets a namespace normally.
     if (!p.begin("skyglass-power", false)) { powerFailure("Power settings unavailable."); return; }
     uint8_t state = p.getUChar("state", 0); p.end();
-    g_powerState = state <= 4 ? (PowerState)state : PowerState::Running;
+    g_powerState = power_decode(state);
     bool usb;
     if (!battery_usb_present(usb)) { powerFailure("Cannot read USB power status."); return; }
     PowerState next = power_boot_state(g_powerState, usb);
@@ -769,30 +857,68 @@ static void handlePower() {
     int status = 200;
     if (g_web.method() == HTTP_POST) {
         const String action = g_web.arg("action");
-        if (action != "shutdown" && action != "shipping" && action != "cancel") {
-            g_web.send(400, "text/plain", "Unknown power action"); return;
-        }
         if (g_web.arg("confirm") != "yes") { g_web.send(400, "text/plain", "Confirmation required"); return; }
-        if (!requestPower(action == "shipping" ? UI_POWER_SHIPPING : action == "shutdown" ? UI_POWER_SHUTDOWN : UI_POWER_CANCEL)) status = 503;
+        if (action == "timeouts") {
+            struct Timeouts { uint32_t normal, deep; } value{};
+            if (!parseSleepMinutes(g_web.arg("normal"), value.normal) ||
+                !parseSleepMinutes(g_web.arg("deep"), value.deep) ||
+                !sleep_timeouts_valid(value.normal, value.deep)) {
+                g_web.send(400, "text/plain", "Use 0-1440 minutes. Deep sleep must be at or after normal sleep when both are enabled."); return;
+            }
+            Preferences p;
+            bool saved = false;
+            if (p.begin("skyglass-sleep", false)) {
+                saved = p.putBytes("timeouts", &value, sizeof(value)) == sizeof(value); p.end();
+            }
+            if (!saved) { g_web.send(503, "text/plain", "Could not save sleep timeouts; settings unchanged."); return; }
+            g_sleep.normalMs = value.normal * 1000U; g_sleep.deepMs = value.deep * 1000U;
+            g_sleep.wake(millis()); syncSleep();
+            g_powerMessage = "Sleep timeouts saved. Inactivity starts now.";
+        } else {
+            UiPowerAction requested;
+            if (action == "shutdown") requested = UI_POWER_SHUTDOWN;
+            else if (action == "cancel") requested = UI_POWER_CANCEL;
+            else if (action == "normal") requested = UI_POWER_NORMAL_SLEEP;
+            else if (action == "deep") requested = UI_POWER_DEEP_SLEEP;
+            else if (action == "wake") requested = UI_POWER_WAKE;
+            else { g_web.send(400, "text/plain", "Unknown power action"); return; }
+            if (!requestPower(requested)) status = 503;
+        }
     }
-    String page = "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>SkyGlass power</title>"
+    String page = "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>SkyGlass power and sleep</title>"
         "<body style='background:#06100a;color:#9affc8;font:16px sans-serif;max-width:520px;margin:30px auto;padding:16px'>"
-        "<h1>Power</h1><p>";
+        "<h1>Power and sleep</h1><p>";
     page += g_powerMessage;
-    page += "</p><p>Shut down turns the device off after USB is unplugged. Reconnect USB to turn it on.</p>"
-        "<p>After flashing and testing, choose Prepare for shipping, then unplug USB. "
-        "The battery can stay connected. The next USB connection restores normal operation. Wi-Fi and other settings are kept.</p>";
+    page += "</p><p>Current mode: <b>";
+    page += g_sleep.mode == SleepMode::Deep ? "Deep sleep" : g_sleep.mode == SleepMode::Normal ? "Normal sleep" : "Awake";
+    page += "</b></p><p>Normal sleep turns the display off and keeps aircraft checks running. "
+        "Deep sleep also pauses aircraft checks and other background downloads. "
+        "Touch the screen to wake either mode. The web page stays available.</p>"
+        "<form method=post action=/power><input type=hidden name=confirm value=yes>"
+        "<button name=action value=normal>Normal sleep now</button> "
+        "<button name=action value=deep>Deep sleep now</button> "
+        "<button name=action value=wake>Wake up</button></form>"
+        "<h2>Automatic sleep</h2><p>Both timers count from the last touch. "
+        "For example: normal sleep after 1 minute, deep sleep after 5 minutes. "
+        "Use 0 to disable either timer. These apply on battery and USB power.</p>"
+        "<form method=post action=/power><input type=hidden name=confirm value=yes>"
+        "<label>Normal sleep after (minutes)<br><input name=normal type=number min=0 max=1440 step=1 required value='";
+    page += String(g_sleep.normalMs / 60000U);
+    page += "'></label><br><br><label>Deep sleep after (minutes)<br><input name=deep type=number min=0 max=1440 step=1 required value='";
+    page += String(g_sleep.deepMs / 60000U);
+    page += "'></label><br><br><button name=action value=timeouts>Save sleep timeouts</button></form>"
+        "<h2>Shut down</h2><p>Turns power off after USB is unplugged. Touch will not wake it; reconnect USB. "
+        "Use this before packing for shipping, with the battery still connected. Settings are kept.</p>";
     if (g_powerReady) page +=
         "<form method=post action=/power onsubmit=\"return confirm('Shut down after unplugging USB? Reconnect USB to wake.')\">"
-        "<input type=hidden name=confirm value=yes><button name=action value=shutdown>Shut down</button></form><br>"
-        "<form method=post action=/power onsubmit=\"return confirm('Finished flashing and testing? Arm shipping mode, then unplug USB.')\">"
-        "<input type=hidden name=confirm value=yes><button name=action value=shipping>Prepare for shipping</button></form><br>";
+        "<input type=hidden name=confirm value=yes><button name=action value=shutdown>Shut down</button></form><br>";
     if (power_waiting(g_powerState)) page += "<form method=post action=/power><input type=hidden name=confirm value=yes>"
         "<button name=action value=cancel>Cancel pending shutdown</button></form>";
     page += "<p><a style='color:inherit' href=/>Back to settings</a></p></body>";
     g_web.sendHeader("Cache-Control", "no-store");
     g_web.send(status, "text/html", page);
 }
+
 #endif
 
 static void handleRoot() {
@@ -1187,7 +1313,7 @@ static void handleRoot() {
         "switches off or shows the clock. A touch wakes it for 15 seconds.</div></div>"
 #if BOARD_HAS_PMIC
         "<div class=card><div class=t>Power</div>"
-        "<a href=/power style='color:#9affc8'>Shut down / Prepare for shipping</a>"
+        "<a href=/power style='color:#9affc8'>Power, sleep and automatic timeouts</a>"
         "<p>Reconnect USB to turn SkyGlass on again.</p></div>"
 #endif
         "<div class=card><div class=t>Firmware</div>"
@@ -2081,7 +2207,9 @@ void setup() {
     Serial.println("\nSkyGlass boot");
 #if BOARD_HAS_PMIC
     powerBoot();
-    if (g_powerReady) ui_set_power_callback([](UiPowerAction action) { requestPower(action); });
+    loadSleepSettings();
+    display::setTouchFilter(sleepTouchFilter);
+    ui_set_power_callback([](UiPowerAction action) { requestPower(action); });
 #endif
 
 #if BOARD_PANEL_QSPI
@@ -2439,6 +2567,7 @@ void loop() {
 #if BOARD_HAS_PMIC
     powerCheckResult();
     powerTick();
+    sleepTick();
 #endif
     if (g_useGps) gps_poll();       // pull NMEA from the LC76G (only when GPS auto-location is on)
 
