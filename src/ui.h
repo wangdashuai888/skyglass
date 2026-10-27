@@ -48,3 +48,8 @@ typedef bool (*UiToggleGet)(int idx);
 typedef void (*UiToggleSet)(int idx, bool on);
 typedef const char *(*UiToggleLabel)(int idx);
 void ui_set_toggle_provider(int count, UiToggleLabel label, UiToggleGet get, UiToggleSet set);
+
+// Optional S3 power actions; absent providers leave other boards unchanged.
+enum UiPowerAction { UI_POWER_SHUTDOWN, UI_POWER_SHIPPING, UI_POWER_CANCEL };
+void ui_set_power_callback(void (*callback)(UiPowerAction));
+void ui_power_message(const char *message, bool pending);

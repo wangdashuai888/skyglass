@@ -7,3 +7,7 @@ bool battery_present();    // a LiPo is connected
 int  battery_percent();    // 0..100, or -1 if unknown
 bool battery_charging();   // currently charging
 void battery_enable_codec_rail();  // enable ALDO1 3.3V (ES8311 analog AVDD) for audio
+
+// Checked power controls; false means an I2C error or unavailable PMIC.
+bool battery_usb_present(bool &present);
+bool battery_shutdown(); // Only with USB absent; cuts main rails, RTC remains powered.

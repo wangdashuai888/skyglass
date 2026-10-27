@@ -32,3 +32,34 @@ void battery_enable_codec_rail() {
     PMU.enableALDO1();
     Serial.println("[batt] ALDO1 (codec AVDD) enabled @3.3V");
 }
+
+// Use checked transactions: a failed status read must never be treated as USB removal.
+static bool pmic_read(uint8_t reg, uint8_t &value) {
+    Wire.beginTransmission(AXP2101_SLAVE_ADDRESS);
+    Wire.write(reg);
+    if (Wire.endTransmission(false) != 0) return false;
+    if (Wire.requestFrom((uint8_t)AXP2101_SLAVE_ADDRESS, (uint8_t)1) != 1) return false;
+    value = Wire.read();
+    return true;
+}
+static bool pmic_write(uint8_t reg, uint8_t value) {
+    Wire.beginTransmission(AXP2101_SLAVE_ADDRESS);
+    Wire.write(reg); Wire.write(value);
+    return Wire.endTransmission() == 0;
+}
+bool battery_usb_present(bool &present) {
+    uint8_t status;
+    if (!s_ok || !pmic_read(0x00, status)) return false;
+    present = (status & 0x20) != 0; // VBUS_GOOD, AXP2101 datasheet REG00[5]
+    return true;
+}
+bool battery_shutdown() {
+    bool usb;
+    if (!battery_usb_present(usb) || usb) return false;
+    uint8_t batfet, common, verified;
+    if (!pmic_read(0x12, batfet) || !pmic_read(0x10, common)) return false;
+    // REG12[3]=0: disable battery-to-system FET in battery-only POWEROFF.
+    // Do not change charger limits, rail voltages, or USB wake configuration.
+    if (!pmic_write(0x12, batfet & ~0x08) || !pmic_read(0x12, verified) || (verified & 0x08)) return false;
+    return pmic_write(0x10, common | 0x01); // soft PWROFF, main rails off
+}

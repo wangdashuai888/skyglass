@@ -77,6 +77,43 @@ static lv_obj_t *s_card = nullptr, *s_cardTitle = nullptr, *s_cardL = nullptr, *
 static lv_obj_t *s_cardRoute = nullptr;
 static lv_obj_t *s_cardHist  = nullptr;   // "seen 3x, closest 0.8 nm" (own row, see below)
 
+// Power actions have a confirmation step and never run PMIC I/O from a render callback.
+static void (*s_powerCallback)(UiPowerAction) = nullptr;
+static lv_obj_t *s_powerDialog = nullptr;
+void ui_set_power_callback(void (*callback)(UiPowerAction)) { s_powerCallback = callback; }
+static void close_power_dialog() {
+    if (s_powerDialog) { lv_msgbox_close(s_powerDialog); s_powerDialog = nullptr; }
+}
+void ui_power_message(const char *message, bool pending) {
+    close_power_dialog();
+    static const char *cancel[] = { "Cancel", "" };
+    static const char *ok[] = { "OK", "" };
+    s_powerDialog = lv_msgbox_create(nullptr, "Power", message, pending ? cancel : ok, false);
+    lv_obj_set_width(s_powerDialog, UI_S(300));
+    lv_obj_center(s_powerDialog);
+    lv_obj_add_event_cb(s_powerDialog, [](lv_event_t *e) {
+        const bool pending = (intptr_t)lv_event_get_user_data(e) != 0;
+        close_power_dialog();
+        if (pending && s_powerCallback) s_powerCallback(UI_POWER_CANCEL);
+    }, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)pending);
+}
+static void power_confirm(lv_event_t *e) {
+    close_power_dialog();
+    const UiPowerAction action = (UiPowerAction)(intptr_t)lv_event_get_user_data(e);
+    static const char *buttons[] = { "Continue", "Cancel", "" };
+    const char *message = action == UI_POWER_SHIPPING
+        ? "Prepare for shipping? Unplug USB when asked. The next USB connection wakes SkyGlass. Settings are kept."
+        : "Shut down? If USB is connected, unplug it when asked. Reconnect USB to wake SkyGlass.";
+    s_powerDialog = lv_msgbox_create(nullptr, "Power", message, buttons, false);
+    lv_obj_set_width(s_powerDialog, UI_S(300)); lv_obj_center(s_powerDialog);
+    lv_obj_add_event_cb(s_powerDialog, [](lv_event_t *event) {
+        const bool confirmed = lv_msgbox_get_active_btn(lv_event_get_current_target(event)) == 0;
+        const UiPowerAction action = (UiPowerAction)(intptr_t)lv_event_get_user_data(event);
+        close_power_dialog();
+        if (confirmed && s_powerCallback) s_powerCallback(action);
+    }, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)action);
+}
+
 // ---- on-device settings menu --------------------------------------------------------
 // Supplied by the firmware (see ui_set_toggle_provider). Left null in the simulator,
 // which has no NVS and no globals to flip; the menu then falls back to the radar options,
@@ -2150,6 +2187,20 @@ void ui_create(void) {
         lv_obj_center(lbl);
         tog_style(btn, on);          // after the label exists: it recolours the text too
         s_togBtn[i] = btn;
+    }
+
+    if (s_powerCallback) {
+        for (int i = 0; i < 2; ++i) {
+            lv_obj_t *btn = lv_btn_create(box);
+            lv_obj_add_style(btn, &stPill, 0);
+            lv_obj_set_size(btn, UI_S(280), UI_S(34));
+            lv_obj_set_pos(btn, UI_S(4), UI_S(2) + ((s_togBtnN + 1) / 2) * UI_S(34) + i * UI_S(38));
+            lv_obj_add_event_cb(btn, power_confirm, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+            lv_obj_t *label = lv_label_create(btn);
+            lv_obj_set_style_text_font(label, F14(), 0);
+            lv_label_set_text(label, i ? "PREPARE FOR SHIPPING" : "SHUT DOWN");
+            lv_obj_center(label);
+        }
     }
 
     // --- weather tile (current conditions + next three days) ---

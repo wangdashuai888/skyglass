@@ -102,3 +102,9 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 
 // ---------- Debug ----------
 #define DEBUG_MEM           0               // 1 = print a [mem] heap/fps line every 5s on serial
+
+// S3 power controls: allow responses/rendering, then require stable USB removal.
+#define POWER_USB_POLL_MS       250U
+#define POWER_USB_ABSENT_MS     500U
+#define POWER_REQUEST_GRACE_MS 1500U
+#define POWER_OFF_VERIFY_MS   1000U

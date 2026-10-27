@@ -32,6 +32,8 @@
 #include "display.h"                  // M0: CO5300 + LVGL bring-up
 #include "imu_qmi8658.h"             // face-down sleep
 #include "gps.h"                     // LC76G GNSS (-G variant only)
+#include "power_policy.h"
+#include <Wire.h>
 #include "battery.h"                 // AXP2101 battery gauge
 #include "rtc_pcf85063.h"            // PCF85063 RTC (offline clock + date)
 #include "audio.h"                   // ES8311 alert pings
@@ -653,6 +655,146 @@ static void applyBrightness() {
 // ----------------------------- configuration web --------------------------------
 static WebServer g_web(80);
 
+#if BOARD_HAS_PMIC
+static PowerState g_powerState = PowerState::Running;
+static bool g_powerReady = false, g_powerNotify = false, g_powerAttempted = false;
+static uint32_t g_powerRequestedAt = 0, g_powerNoUsbAt = 0, g_powerPollAt = 0;
+static const char *g_powerMessage = "Reconnect USB to wake SkyGlass after shutdown.";
+
+static bool savePowerState(PowerState state) {
+    Preferences p;
+    if (!p.begin("skyglass-power", false)) return false;
+    const bool saved = p.putUChar("state", (uint8_t)state) == 1;
+    p.end();
+    if (saved) g_powerState = state;
+    return saved;
+}
+static void powerFailure(const char *message) {
+    // Fail open: keep the UI and USB flashing available after any storage/I2C failure.
+    savePowerState(PowerState::Running);
+    g_powerReady = false;
+    g_powerMessage = message; g_powerNotify = true;
+}
+static bool requestPower(UiPowerAction action) {
+    if (action == UI_POWER_CANCEL) {
+        if (!savePowerState(PowerState::Running)) {
+            g_powerReady = false;
+            g_powerMessage = "Could not cancel in storage. Keep USB connected and retry.";
+            g_powerNotify = true; return false;
+        }
+        g_powerAttempted = false;
+        g_powerMessage = "Shutdown cancelled. SkyGlass stays on.";
+        g_powerNotify = true; return true;
+    }
+    bool usb;
+    if (!g_powerReady || !battery_usb_present(usb)) {
+        g_powerMessage = "Power controller unavailable. Shutdown was not armed.";
+        g_powerNotify = true; return false;
+    }
+    if (!battery_present()) {
+        if (action == UI_POWER_SHIPPING) {
+            g_powerMessage = "Connect a battery before preparing for shipping.";
+            g_powerNotify = true; return false;
+        }
+        // USB-only units lose power before a disconnect can be observed or saved.
+        if (!savePowerState(PowerState::Running)) {
+            g_powerMessage = "Could not clear power state. Keep USB connected and retry.";
+            g_powerNotify = true; return false;
+        }
+        g_powerMessage = "No battery connected. Unplug USB to turn off; reconnect USB to turn on.";
+        g_powerNotify = true; return true;
+    }
+    if (!savePowerState(action == UI_POWER_SHIPPING ? PowerState::ShipWaiting : PowerState::StopWaiting)) {
+        g_powerMessage = "Could not save power state. Shutdown was not armed.";
+        g_powerNotify = true; return false;
+    }
+    g_powerRequestedAt = millis(); g_powerNoUsbAt = 0; g_powerAttempted = false;
+    g_powerMessage = usb ? "Ready. Unplug USB to shut down. Reconnect USB to wake SkyGlass."
+                         : "Shutting down. Connect USB to wake SkyGlass.";
+    g_powerNotify = true;
+    return true;
+}
+static void powerBoot() {
+    Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
+    g_powerReady = battery_begin();
+    if (!g_powerReady) return;
+    Preferences p;
+    // Open read/write so a new, unprovisioned board gets a namespace normally.
+    if (!p.begin("skyglass-power", false)) { powerFailure("Power settings unavailable."); return; }
+    uint8_t state = p.getUChar("state", 0); p.end();
+    g_powerState = state <= 4 ? (PowerState)state : PowerState::Running;
+    bool usb;
+    if (!battery_usb_present(usb)) { powerFailure("Cannot read USB power status."); return; }
+    PowerState next = power_boot_state(g_powerState, usb);
+    // A battery may have been removed after arming. Do not leave a USB-only unit
+    // permanently waiting for a power-loss event that its CPU cannot observe.
+    if (usb && !battery_present() && power_waiting(next)) next = PowerState::Running;
+    if (next != g_powerState && !savePowerState(next)) { powerFailure("Could not restore power settings."); return; }
+    if (power_off_state(g_powerState) && !usb) {
+        // Unexpected battery-only wake: power back off before display or Wi-Fi starts.
+        battery_shutdown();
+        delay(200); // setup only; normally power disappears before this returns
+        powerFailure("Power-off did not complete. Reconnect USB and retry.");
+    } else if (power_waiting(g_powerState)) {
+        g_powerRequestedAt = millis(); g_powerNotify = true;
+        g_powerMessage = "Shutdown is armed. Unplug USB to shut down, or cancel.";
+    }
+}
+static void powerTick() {
+    if (g_powerNotify) {
+        ui_power_message(g_powerMessage, power_waiting(g_powerState));
+        g_powerNotify = false;
+    }
+    if (!g_powerReady || !power_waiting(g_powerState)) return;
+    const uint32_t now = millis();
+    if (now - g_powerPollAt < POWER_USB_POLL_MS) return;
+    g_powerPollAt = now;
+    bool usb;
+    if (!battery_usb_present(usb)) { g_powerNoUsbAt = 0; return; }
+    if (usb) { g_powerNoUsbAt = 0; return; }
+    if (!g_powerNoUsbAt) g_powerNoUsbAt = now;
+    if (now - g_powerNoUsbAt < POWER_USB_ABSENT_MS || now - g_powerRequestedAt < POWER_REQUEST_GRACE_MS) return;
+    if (!savePowerState(power_off_target(g_powerState))) { powerFailure("Could not save shutdown state."); return; }
+    if (!battery_shutdown()) { powerFailure("Power-off failed. Keep USB connected and retry."); return; }
+    g_powerAttempted = true;
+    g_powerRequestedAt = now;
+}
+static void powerCheckResult() {
+    if (g_powerAttempted && millis() - g_powerRequestedAt > POWER_OFF_VERIFY_MS) {
+        g_powerAttempted = false;
+        powerFailure("Power-off did not complete. Reconnect USB and retry.");
+    }
+}
+static void handlePower() {
+    int status = 200;
+    if (g_web.method() == HTTP_POST) {
+        const String action = g_web.arg("action");
+        if (action != "shutdown" && action != "shipping" && action != "cancel") {
+            g_web.send(400, "text/plain", "Unknown power action"); return;
+        }
+        if (g_web.arg("confirm") != "yes") { g_web.send(400, "text/plain", "Confirmation required"); return; }
+        if (!requestPower(action == "shipping" ? UI_POWER_SHIPPING : action == "shutdown" ? UI_POWER_SHUTDOWN : UI_POWER_CANCEL)) status = 503;
+    }
+    String page = "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>SkyGlass power</title>"
+        "<body style='background:#06100a;color:#9affc8;font:16px sans-serif;max-width:520px;margin:30px auto;padding:16px'>"
+        "<h1>Power</h1><p>";
+    page += g_powerMessage;
+    page += "</p><p>Shut down turns the device off after USB is unplugged. Reconnect USB to turn it on.</p>"
+        "<p>After flashing and testing, choose Prepare for shipping, then unplug USB. "
+        "The battery can stay connected. The next USB connection restores normal operation. Wi-Fi and other settings are kept.</p>";
+    if (g_powerReady) page +=
+        "<form method=post action=/power onsubmit=\"return confirm('Shut down after unplugging USB? Reconnect USB to wake.')\">"
+        "<input type=hidden name=confirm value=yes><button name=action value=shutdown>Shut down</button></form><br>"
+        "<form method=post action=/power onsubmit=\"return confirm('Finished flashing and testing? Arm shipping mode, then unplug USB.')\">"
+        "<input type=hidden name=confirm value=yes><button name=action value=shipping>Prepare for shipping</button></form><br>";
+    if (power_waiting(g_powerState)) page += "<form method=post action=/power><input type=hidden name=confirm value=yes>"
+        "<button name=action value=cancel>Cancel pending shutdown</button></form>";
+    page += "<p><a style='color:inherit' href=/>Back to settings</a></p></body>";
+    g_web.sendHeader("Cache-Control", "no-store");
+    g_web.send(status, "text/html", page);
+}
+#endif
+
 static void handleRoot() {
     const int th = radar::theme();
     // Mirror RANGE_STEPS_KM exactly. Offering ranges the device table lacks looked fine
@@ -1043,6 +1185,11 @@ static void handleRoot() {
         "<label>Until</label><input type=time value='%02d:%02d' onchange='qe(this.value)'>"
         "<div style='font-size:12px;opacity:.6;margin-top:6px'>During the window the screen dims, "
         "switches off or shows the clock. A touch wakes it for 15 seconds.</div></div>"
+#if BOARD_HAS_PMIC
+        "<div class=card><div class=t>Power</div>"
+        "<a href=/power style='color:#9affc8'>Shut down / Prepare for shipping</a>"
+        "<p>Reconnect USB to turn SkyGlass on again.</p></div>"
+#endif
         "<div class=card><div class=t>Firmware</div>"
         "<p style='color:#9affc8;font-size:13px;margin:0 0 8px'>Running <b>v" FW_VERSION "</b></p>"
         "<div id=fwst style='font-size:13px;color:#9affc8;margin-bottom:8px'>checking&hellip;</div>"
@@ -1932,6 +2079,10 @@ void setup() {
     Serial.begin(115200);
     delay(200);
     Serial.println("\nSkyGlass boot");
+#if BOARD_HAS_PMIC
+    powerBoot();
+    if (g_powerReady) ui_set_power_callback([](UiPowerAction action) { requestPower(action); });
+#endif
 
 #if BOARD_PANEL_QSPI
     if (PIN_LCD_SCLK < 0 || PIN_I2C_SDA < 0) {
@@ -2024,7 +2175,9 @@ void setup() {
     ui_set_range_km(g_settings.rangeKm);         // show the loaded range
 
     imu_begin();       // face-down sleep (no-op if the IMU isn't detected)
-    battery_begin();   // AXP2101 (no-op if not detected / no battery)
+#if !BOARD_HAS_PMIC
+    battery_begin();   // other-board shim; S3 initialized early for power-state recovery
+#endif
     gps_begin();       // LC76G GNSS (no-op if not the -G variant)
     battery_enable_codec_rail();   // power the ES8311 analog rail before audio init
 
@@ -2115,6 +2268,10 @@ void setup() {
 
     // configuration web page (http://<board hostname>.local/)
     g_web.on("/", handleRoot);
+#if BOARD_HAS_PMIC
+    g_web.on("/power", HTTP_GET, handlePower);
+    g_web.on("/power", HTTP_POST, handlePower);
+#endif
     g_web.on("/save", HTTP_POST, handleSave);
     g_web.on("/wifi", HTTP_POST, handleWifi);
 #if !BOARD_HAS_WIFIMANAGER
@@ -2279,6 +2436,10 @@ void loop() {
     g_wm.process();                 // service the WiFi config portal (non-blocking)
 #endif
     g_web.handleClient();           // serve the configuration web page
+#if BOARD_HAS_PMIC
+    powerCheckResult();
+    powerTick();
+#endif
     if (g_useGps) gps_poll();       // pull NMEA from the LC76G (only when GPS auto-location is on)
 
     // scheduled reboot after a fresh WiFi config (see setSaveConfigCallback)
