@@ -232,7 +232,40 @@ happened to fly past, so `/view?mil=1` draws every contact as military for inspe
 snow on demand) - it has to latch, since `build_weather()` repaints from live data every
 poll and would otherwise undo the override within two seconds.
 
-## Render performance (and one instructive failure)
+## Lightweight sweep (current)
+The default S3 sweep is now a solid 2-pixel line with no translucent fan or
+sweep-triggered aircraft halo. Aircraft stay fully visible. The line advances
+4 pixels at the rim per timer tick, instead of 11; late frames slow rotation
+rather than skipping ahead. The existing web sweep toggle still works.
+
+The old sweep drew 18 translucent triangles. Its large bounding rectangle also
+forced lower layers (map, trails, chrome) and aircraft to redraw. Removing the
+fan alone would leave the large bounding rectangle of a diagonal line, so the
+new path invalidates eight short radial sections covering both the previous
+and current beam, with padding for antialiasing and round caps. LVGL restores
+the scene underneath; no black eraser is drawn over aircraft or the map.
+
+Host coverage tests cover every integer angle at radii 218 and 340, including
+wraparound, checking all pixels within 2 pixels of both lines. The requested
+rectangles sum to about 9% of the old 55-degree wedge bounds, before LVGL region
+merging and other UI damage. This is a geometry result, NOT a measured FPS gain.
+The simulator cannot measure ESP32 rendering speed or panel transfer time.
+
+Tunables live in config.h. The diagnostic sweep tuning endpoint still accepts
+positive trail angles for comparisons; angle 0 restores the lightweight line.
+Changing shape invalidates the whole sweep layer once to clear its old pixels.
+The draw FPS counter now counts an angle once, rather than counting each dirty
+region/buffer callback as another frame.
+
+Before release, compare frame_ms on the physical S3 with the same location,
+aircraft count, map, trails and orientation; visually check motion, touch,
+all themes and sweep on/off. Arbitrary-angle screen rotation and other moving
+layers can still dominate frame cost. No guaranteed 60 FPS claim is made.
+
+### Previous sweep measurements and experiments
+The notes below describe the previous glow/wedge renderer, not measured
+performance of the new default line.
+
 The sweep is the most expensive element on screen: every frame redraws a fan of wide
 anti-aliased alpha lines *and* forces every layer beneath it (basemap, flow canvas,
 chrome, coastline, airports) to recomposite over the wedge's bounding box. Measured on

@@ -114,3 +114,21 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 #define DEEP_SLEEP_DEFAULT_SEC   0U
 #define SLEEP_WAKE_GRACE_MS   15000U
 #define SLEEP_FEED_PARK_MS      100U
+
+// ---------- Lightweight radar sweep ----------
+// Thin solid beam by default; optional diagnostic wedge remains available.
+#ifndef SWEEP_MAX_STEP_PX
+#define SWEEP_MAX_STEP_PX 4.0f
+#endif
+#ifndef SWEEP_FRAME_MS
+#define SWEEP_FRAME_MS 30
+#endif
+#ifndef SWEEP_TRAIL_DEG
+#define SWEEP_TRAIL_DEG 0.0f
+#endif
+#ifndef SWEEP_TRAIL_STEPS
+#define SWEEP_TRAIL_STEPS 18
+#endif
+#define SWEEP_DIRTY_SEGMENTS 8
+#define SWEEP_LINE_WIDTH 2
+#define SWEEP_DIRTY_PAD 3

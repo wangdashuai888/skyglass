@@ -1,3 +1,4 @@
+#include "sweep_damage.h"
 // Radar scope (M1) + aircraft (M2) + selection (M3) + selectable themes (M4).
 // Pure LVGL, portable. Visual reference: assets/plane_radar_2.0_mockup.html
 //   THEME_PHOSPHOR : green-on-black radar scope (rings, sweep, altitude glyphs)
@@ -72,45 +73,7 @@
 #define ORB_BG_BOT lv_color_hex(0x09250A)
 #define ORB_FLOW   lv_color_hex(0xFFC24D)
 
-// ---- sweep config ----
-// These are the original values. A shorter trail and a lower frame rate measured faster
-// (9 -> 16 fps) but looked WORSE on the actual panel: the long fading trail visually
-// masks the angular stepping, so shortening it exposed the very judder it was meant to
-// cure. Raw frame rate is not the thing being optimised here — perceived smoothness is.
-// Do not "optimise" these without looking at the screen.
-#define SWEEP_PERIOD_MS   6000   // one revolution, honoured whenever frames keep up
-// Largest distance the leading edge may travel in one frame, in pixels at the rim.
-//
-// Expressed in pixels rather than degrees on purpose: what the eye judges is how far the
-// beam jumps on screen, and the same angle is a bigger jump on a bigger radius. Three
-// degrees is ~11 px at the 466 panel's rim but ~18 px at 720, which is why the identical
-// setting looked fine on one board and stepped on the other.
-//
-// It is a clamp, not a fixed rate. The sweep advances by elapsed time, so a revolution
-// takes SWEEP_PERIOD_MS whenever frames keep up, and a late frame slows the beam rather
-// than teleporting it. Deriving the angle straight from the wall clock was what made the
-// S3 stutter; advancing a fixed amount per frame instead tied rotation speed to frame
-// rate, so the same firmware crawled on one panel and span on the other.
-#ifndef SWEEP_MAX_STEP_PX
-#  define SWEEP_MAX_STEP_PX 11.0f
-#endif
-#define SWEEP_MAX_STEP_DEG     (SWEEP_MAX_STEP_PX * 180.0f / (3.14159265f * (float)RADAR_R_OUTER_PX))
-// Deliberately not the fastest tick the panel can manage. The angle comes from the
-// wall clock, so a frame that misses its deadline advances the beam further rather than
-// later -- uneven angular steps, which the eye reads as stutter. Draw (~6-9 ms) plus the
-// QSPI flush of the invalidated wedge (~95 KB, ~9 ms) sits right on a 20 ms budget, so
-// frames landed inconsistently at 37-50 fps. A 30 ms tick every frame comfortably makes
-// is steadier than a 20 ms tick it sometimes misses: constant step beats peak rate.
-#ifndef SWEEP_FRAME_MS
-#  define SWEEP_FRAME_MS  30
-#endif
-#ifndef SWEEP_TRAIL_DEG
-#  define SWEEP_TRAIL_DEG 55.0f
-#endif
-#ifndef SWEEP_TRAIL_STEPS
-#  define SWEEP_TRAIL_STEPS 18   // see sweep_draw_cb: cost is per-polygon
-#endif
-#define SWEEP_TRAIL_OPA   140
+// Sweep tunables are in config.h.
 
 // ---- aircraft / flow / orb config ----
 #define TRAIL_MAX         7
@@ -513,7 +476,7 @@ static void sweep_draw_cb(lv_event_t *e) {
     lv_draw_rect_dsc_init(&polyDsc);
     polyDsc.bg_color = s_cRing;
 
-    for (int i = steps; i >= 1; --i) {
+    for (int i = s_trailDeg > 0.0f ? steps : 0; i >= 1; --i) {
         const float frac = 1.0f - (float)i / (float)steps;
         const float a1 = s_sweepDeg - (float)i * stepDeg;
         const float a2 = s_sweepDeg - (float)(i - 1) * stepDeg;
@@ -532,15 +495,20 @@ static void sweep_draw_cb(lv_event_t *e) {
     lv_draw_line_dsc_t le;
     lv_draw_line_dsc_init(&le);
     le.color = s_cLead;
-    le.width = 2;
-    le.opa = 245;
+    le.width = SWEEP_LINE_WIDTH;
+    le.opa = LV_OPA_COVER;
     le.round_start = 1;
     le.round_end = 1;
     lv_point_t lead = rim_point(s_sweepDeg, R);
     lv_draw_line(dctx, &le, &center, &lead);
 
     s_drawUsAcc += micros() - t0;
-    if (++s_drawCnt >= 30) {
+    // LVGL can call us once per dirty region/buffer chunk. Count a new
+    // beam angle only once, not every draw callback as an extra frame.
+    static float lastPaintedAngle = -1.0f;
+    const bool newFrame = lastPaintedAngle != s_sweepDeg;
+    lastPaintedAngle = s_sweepDeg;
+    if (newFrame && ++s_drawCnt >= 30) {
         const uint32_t now = millis();
         if (s_perfMarkMs) {
             const uint32_t el = now - s_perfMarkMs;
@@ -816,8 +784,8 @@ static void sweep_timer_cb(lv_timer_t *t) {
     // revolution time follows frame rate rather than the nominal period, which is the
     // trade this project has repeatedly chosen: even motion beats a correct period.
     //
-    // The size still comes from the pixel setting, so one number means the same thing on
-    // both panels: the same angle is ~11 px of rim travel at 466 and ~18 px at 720.
+    // Small fixed rim steps keep the lightweight beam from visibly jumping.
+    // Screen-specific overrides may choose a different step size.
     {
         const uint32_t now = millis();
         static uint32_t s_lastSweepMs = 0;
@@ -850,6 +818,17 @@ static void sweep_timer_cb(lv_timer_t *t) {
         }
     }
     if (!s_sweep) return;
+    if (s_trailDeg == 0.0f) {
+        const lv_point_t oldTip = rim_point(s_prevSweepDeg, (float)RADAR_R_OUTER_PX);
+        const lv_point_t newTip = rim_point(s_sweepDeg, (float)RADAR_R_OUTER_PX);
+        sweep_damage::regions(s_cx, s_cy, oldTip.x, oldTip.y, newTip.x, newTip.y,
+            SWEEP_DIRTY_SEGMENTS, SWEEP_DIRTY_PAD, [](const sweep_damage::Rect &r) {
+                lv_area_t area = {(lv_coord_t)r.x1, (lv_coord_t)r.y1,
+                                  (lv_coord_t)r.x2, (lv_coord_t)r.y2};
+                lv_obj_invalidate_area(s_sweep, &area);
+            });
+        return;
+    }
     lv_area_t a, b, area;
     wedge_bbox(s_prevSweepDeg, &a);
     wedge_bbox(s_sweepDeg, &b);
@@ -984,9 +963,10 @@ static void ac_draw_cb(lv_event_t *e) {
                 draw_offrange(d, ac);
             }
         } else {
-            // Target Phosphor Glow: Calculate opacity based on angular distance to sweep beam
+            // The lightweight line keeps aircraft steadily visible: a moving glow
+            // would require repainting whole glyphs beyond the beam damage regions.
             lv_opa_t targetOpa = 100; // Baseline dim phosphor opacity (~39%)
-            if (s_sweepEnabled) {
+            if (s_sweepEnabled && s_trailDeg > 0.0f) {
                 const float dx = (float)(ac.pos.x - s_cx);
                 const float dy = (float)(ac.pos.y - s_cy);
                 float acDeg = atan2f(dy, dx) * 180.0f / (float)M_PI + 90.0f;
@@ -1805,7 +1785,10 @@ void sweepPerf(float *fps, uint32_t *drawUs, float *stepAvg, float *stepMax) {
 uint32_t sweepFrameMs() { return s_dtAvg; }
 
 void setSweepTuning(float trailDeg, int trailSteps, float maxStepPx) {
-    if (trailDeg   > 5.0f && trailDeg   <= 180.0f) s_trailDeg   = trailDeg;
+    if (trailDeg >= 0.0f && trailDeg <= 180.0f && trailDeg != s_trailDeg) {
+        s_trailDeg = trailDeg;
+        if (s_sweep) lv_obj_invalidate(s_sweep); // erase the previous wider shape
+    }
     if (trailSteps >= 4   && trailSteps <= 48)     s_trailSteps = trailSteps;
     if (maxStepPx  > 1.0f && maxStepPx  <= 60.0f)  s_maxStepPx  = maxStepPx;
 }
