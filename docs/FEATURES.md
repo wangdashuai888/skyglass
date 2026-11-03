@@ -236,7 +236,7 @@ poll and would otherwise undo the override within two seconds.
 In the web UI's Display card, leave Show radar sweep enabled and choose:
 
 - Extensive: 55-degree fading fan, 18 bands, original 11-pixel rim step on S3.
-- Balanced: 20-degree fading fan, 6 bands, 3-pixel leading line and 5.5-pixel rim step on S3 (default).
+- Balanced: 18-degree fading fan, 6 bands, 2-pixel leading line and 5.5-pixel rim step on S3 (default).
 - Smooth: solid 2-pixel line, no fan, 4-pixel rim step on S3.
 
 All styles light up aircraft as the beam crosses them. Extensive retains dimming
@@ -247,7 +247,8 @@ The lighter styles repaint only the halo area for glow, rather than whole labels
 
 The selection applies immediately and is stored as sweepstyle in capsuleradar
 NVS. Invalid selections are rejected. Existing sweep on/off remains independent.
-Firmware version: 1.19.6. The default idle dim timeout is one minute.
+Firmware version: 1.19.7. Balanced restores the previous test drawing after
+the wider 20-degree/3-pixel version was reported to feel laggy. The default idle dim timeout is one minute.
 Existing saved dim timeouts and sweep choices are retained. Use the S3 app image with the web
 Firmware update page, not as a merged USB-flasher image.
 
