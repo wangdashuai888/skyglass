@@ -1,4 +1,5 @@
 #include "sweep_damage.h"
+#include "sweep_glow.h"
 // Radar scope (M1) + aircraft (M2) + selection (M3) + selectable themes (M4).
 // Pure LVGL, portable. Visual reference: assets/plane_radar_2.0_mockup.html
 //   THEME_PHOSPHOR : green-on-black radar scope (rings, sweep, altitude glyphs)
@@ -146,6 +147,7 @@ static float       s_sweepDeg = 0.0f;
 // Sweep shape, adjustable at runtime. Comparing variants by eye is the only way to judge
 // this -- measured frame time has twice pointed the wrong way -- and reflashing between
 // each one makes that comparison useless.
+static int         s_sweepStyle = SWEEP_STYLE_DEFAULT;
 static float       s_trailDeg   = SWEEP_TRAIL_DEG;
 static int         s_trailSteps = SWEEP_TRAIL_STEPS;
 static float       s_maxStepPx  = SWEEP_MAX_STEP_PX;
@@ -495,8 +497,8 @@ static void sweep_draw_cb(lv_event_t *e) {
     lv_draw_line_dsc_t le;
     lv_draw_line_dsc_init(&le);
     le.color = s_cLead;
-    le.width = SWEEP_LINE_WIDTH;
-    le.opa = LV_OPA_COVER;
+    le.width = s_sweepStyle == 1 ? SWEEP_BALANCED_LINE_WIDTH : SWEEP_LINE_WIDTH;
+    le.opa = s_sweepStyle == 0 ? 245 : LV_OPA_COVER;
     le.round_start = 1;
     le.round_end = 1;
     lv_point_t lead = rim_point(s_sweepDeg, R);
@@ -818,6 +820,24 @@ static void sweep_timer_cb(lv_timer_t *t) {
         }
     }
     if (!s_sweep) return;
+    // Glow changes even after the beam has left the aircraft. Invalidate its
+    // old AND new glow footprint, including the final frame that erases it.
+    if (s_acLayer) for (const AcDraw &ac : s_acs) {
+        if (!ac.inRange) continue;
+        const float bearing = atan2f(float(ac.pos.y-s_cy), float(ac.pos.x-s_cx)) * 180.0f / float(M_PI) + 90.0f;
+        const float width = s_sweepStyle == 0 ? SWEEP_ORIGINAL_TRAIL_DEG : SWEEP_GLOW_DEG;
+        if (sweep_glow_fraction(s_prevSweepDeg, bearing, width) <= 0 &&
+            sweep_glow_fraction(s_sweepDeg, bearing, width) <= 0) continue;
+        if (s_sweepStyle == 0) {
+            lv_area_t area = glyph_bbox(ac, ac.pos);
+            lv_obj_invalidate_area(s_acLayer, &area);
+        } else {
+            const int r = SWEEP_GLOW_DAMAGE_RADIUS;
+            lv_area_t area = {(lv_coord_t)(ac.pos.x-r), (lv_coord_t)(ac.pos.y-r),
+                              (lv_coord_t)(ac.pos.x+r), (lv_coord_t)(ac.pos.y+r)};
+            lv_obj_invalidate_area(s_acLayer, &area);
+        }
+    }
     if (s_trailDeg == 0.0f) {
         const lv_point_t oldTip = rim_point(s_prevSweepDeg, (float)RADAR_R_OUTER_PX);
         const lv_point_t newTip = rim_point(s_sweepDeg, (float)RADAR_R_OUTER_PX);
@@ -963,32 +983,22 @@ static void ac_draw_cb(lv_event_t *e) {
                 draw_offrange(d, ac);
             }
         } else {
-            // The lightweight line keeps aircraft steadily visible: a moving glow
-            // would require repainting whole glyphs beyond the beam damage regions.
-            lv_opa_t targetOpa = 100; // Baseline dim phosphor opacity (~39%)
-            if (s_sweepEnabled && s_trailDeg > 0.0f) {
-                const float dx = (float)(ac.pos.x - s_cx);
-                const float dy = (float)(ac.pos.y - s_cy);
-                float acDeg = atan2f(dy, dx) * 180.0f / (float)M_PI + 90.0f;
-                if (acDeg < 0.0f) acDeg += 360.0f;
-                float delta = fmodf(s_sweepDeg - acDeg + 360.0f, 360.0f);
-                if (delta < 55.0f) {
-                    float glowFrac = 1.0f - (delta / 55.0f);
-                    // Smooth quadratic decay from 255 (100% full bright glow) down to 100 (39% dim)
-                    targetOpa = (lv_opa_t)(100.0f + 155.0f * (glowFrac * glowFrac));
-
-                    // Draw soft glowing phosphor radial halo surrounding blip (matching sample 2 & sample 3)
-                    lv_draw_arc_dsc_t haloDsc;
-                    lv_draw_arc_dsc_init(&haloDsc);
-                    haloDsc.color = ac.color;
-                    haloDsc.width = (uint16_t)(3 + (uint16_t)(glowFrac * 5.0f));
-                    haloDsc.opa = (lv_opa_t)(glowFrac * glowFrac * 210.0f);
-                    if (haloDsc.opa > 10) {
-                        lv_draw_arc(d, &haloDsc, &ac.pos, 10, 0, 360);
-                    }
+            // Extensive dims the whole contact. The lighter styles keep text and
+            // vectors steady and animate only a compact halo around the aircraft.
+            lv_opa_t targetOpa = LV_OPA_COVER;
+            if (s_sweepEnabled) {
+                const float bearing = atan2f(float(ac.pos.y-s_cy), float(ac.pos.x-s_cx)) * 180.0f / float(M_PI) + 90.0f;
+                const float width = s_sweepStyle == 0 ? SWEEP_ORIGINAL_TRAIL_DEG : SWEEP_GLOW_DEG;
+                const float glow = sweep_glow_fraction(s_sweepDeg, bearing, width);
+                if (s_sweepStyle == 0) targetOpa = (lv_opa_t)(100.0f + 155.0f * glow * glow);
+                if (glow > 0) {
+                    lv_draw_arc_dsc_t halo;
+                    lv_draw_arc_dsc_init(&halo);
+                    halo.color = ac.color;
+                    halo.width = (uint16_t)(3 + (uint16_t)(glow * 5.0f));
+                    halo.opa = (lv_opa_t)(glow * glow * 210.0f);
+                    if (halo.opa > 10) lv_draw_arc(d, &halo, &ac.pos, SWEEP_GLOW_RADIUS, 0, 360);
                 }
-            } else {
-                targetOpa = LV_OPA_COVER;
             }
 
             draw_trail(d, ac, ac.color);
@@ -1294,6 +1304,18 @@ void setSweepEnabled(bool on) {
     }
 }
 bool sweepEnabled() { return s_sweepEnabled; }
+int sweepStyle() { return s_sweepStyle; }
+void setSweepStyle(int style) {
+    if (style < 0 || style > 2) return;
+    s_sweepStyle = style;
+    s_trailDeg = style == 0 ? SWEEP_ORIGINAL_TRAIL_DEG : style == 1 ? SWEEP_BALANCED_TRAIL_DEG : 0.0f;
+    s_trailSteps = style == 1 ? SWEEP_BALANCED_STEPS : SWEEP_ORIGINAL_STEPS;
+    const float step = style == 0 ? SWEEP_ORIGINAL_STEP_PX : style == 1 ? SWEEP_BALANCED_STEP_PX : SWEEP_SMOOTH_STEP_PX;
+    s_maxStepPx = step * float(SCREEN_W) / 466.0f;
+    if (s_sweep) lv_obj_invalidate(s_sweep);
+    if (s_acLayer) lv_obj_invalidate(s_acLayer); // clear old halos/dim labels once
+}
+
 
 void setAirportsEnabled(bool on) {
     s_airportsEnabled = on;
@@ -1419,6 +1441,7 @@ void init(void *lv_parent) {
     lv_obj_set_style_bg_opa(s_centerDot, LV_OPA_COVER, 0);
     lv_obj_clear_flag(s_centerDot, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
+    setSweepStyle(SWEEP_STYLE_DEFAULT);
     s_sweepDeg = 0.0f;
     s_prevSweepDeg = 0.0f;
     if (!s_timer) s_timer = lv_timer_create(sweep_timer_cb, SWEEP_FRAME_MS, nullptr);

@@ -1,9 +1,20 @@
 #include "sweep_damage.h"
+#include "sweep_glow.h"
 #include <cassert>
 #include <cstdio>
 #include <vector>
 #include <cmath>
 int main() {
+    assert(sweep_glow_fraction(10,10,24) == 1.0f);
+    assert(sweep_glow_fraction(9,10,24) == 0.0f); // not reached yet
+    assert(sweep_glow_fraction(22,10,24) == .5f);
+    assert(sweep_glow_fraction(34,10,24) == 0.0f); // fully faded
+    assert(sweep_glow_fraction(1,359,24) > .9f); // wrap through north
+    assert(sweep_glow_fraction(359,1,24) == 0.0f);
+    assert(sweep_glow_fraction(10,10,0) == 0.0f);
+    // The frame after expiry still has to erase the old glow.
+    assert(sweep_glow_fraction(33,10,24) > 0 && sweep_glow_fraction(35,10,24) == 0);
+
     double total=0, oldTotal=0;
     for(int radius : {218, 340}) for(int angle=0;angle<360;++angle) {
         const double pi=3.141592653589793;

@@ -232,35 +232,39 @@ happened to fly past, so `/view?mil=1` draws every contact as military for inspe
 snow on demand) - it has to latch, since `build_weather()` repaints from live data every
 poll and would otherwise undo the override within two seconds.
 
-## Lightweight sweep (current)
-The default S3 sweep is now a solid 2-pixel line with no translucent fan or
-sweep-triggered aircraft halo. Aircraft stay fully visible. The line advances
-4 pixels at the rim per timer tick, instead of 11; late frames slow rotation
-rather than skipping ahead. The existing web sweep toggle still works.
+## Sweep styles
+In the web UI's Display card, leave Show radar sweep enabled and choose:
 
-The old sweep drew 18 translucent triangles. Its large bounding rectangle also
-forced lower layers (map, trails, chrome) and aircraft to redraw. Removing the
-fan alone would leave the large bounding rectangle of a diagonal line, so the
-new path invalidates eight short radial sections covering both the previous
-and current beam, with padding for antialiasing and round caps. LVGL restores
-the scene underneath; no black eraser is drawn over aircraft or the map.
+- Extensive: 55-degree fading fan, 18 bands, original 11-pixel rim step on S3.
+- Balanced: 20-degree fading fan, 6 bands, 3-pixel leading line and 5.5-pixel rim step on S3 (default).
+- Smooth: solid 2-pixel line, no fan, 4-pixel rim step on S3.
 
-Host coverage tests cover every integer angle at radii 218 and 340, including
-wraparound, checking all pixels within 2 pixels of both lines. The requested
-rectangles sum to about 9% of the old 55-degree wedge bounds, before LVGL region
-merging and other UI damage. This is a geometry result, NOT a measured FPS gain.
-The simulator cannot measure ESP32 rendering speed or panel transfer time.
+All styles light up aircraft as the beam crosses them. Extensive retains dimming
+of the whole contact; Balanced and Smooth keep aircraft/text steadily visible
+and fade a compact halo over the following 24 degrees. Both previous and current
+glow footprints are invalidated, including the final erase after fading out.
+The lighter styles repaint only the halo area for glow, rather than whole labels.
 
-Tunables live in config.h. The diagnostic sweep tuning endpoint still accepts
-positive trail angles for comparisons; angle 0 restores the lightweight line.
-Changing shape invalidates the whole sweep layer once to clear its old pixels.
-The draw FPS counter now counts an angle once, rather than counting each dirty
-region/buffer callback as another frame.
+The selection applies immediately and is stored as sweepstyle in capsuleradar
+NVS. Invalid selections are rejected. Existing sweep on/off remains independent.
+Firmware version: 1.19.6. The default idle dim timeout is one minute.
+Existing saved dim timeouts and sweep choices are retained. Use the S3 app image with the web
+Firmware update page, not as a merged USB-flasher image.
 
-Before release, compare frame_ms on the physical S3 with the same location,
-aircraft count, map, trails and orientation; visually check motion, touch,
-all themes and sweep on/off. Arbitrary-angle screen rotation and other moving
-layers can still dominate frame cost. No guaranteed 60 FPS claim is made.
+The old fan required many translucent polygons and a large underlying repaint.
+Smooth instead covers old/new beams with eight small radial damage rectangles.
+A host test checks beam coverage across 720 angles/two radii and glow onset,
+fade-out, and north-crossing wraparound. Line-only damage sums to about 9% of
+old wedge bounds before LVGL merging, aircraft halos, and other UI damage.
+This is NOT a measured FPS gain. Diagnostic FPS counts each angle once instead
+of every draw callback. Rendering speed must be checked on the physical S3.
+
+A desktop stress preview exercised 400 updates per style and compared partial
+redraws with full redraws: The earlier 18-degree Balanced matched throughout; Extensive and Smooth had
+occasional small raster differences (1-8 pixels), so this is not a claim of
+pixel-perfect rendering or a substitute for panel testing. S3 firmware builds.
+Compare the three styles using the same map, traffic and orientation settings.
+Check changing styles, glow fade-out, sweep on/off and saved choice after restart.
 
 ### Previous sweep measurements and experiments
 The notes below describe the previous glow/wedge renderer, not measured

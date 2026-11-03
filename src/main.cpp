@@ -1205,6 +1205,9 @@ static void handleRoot() {
         "<input type=range min=5 max=255 value='%d' oninput='b(this.value,0)' onchange='b(this.value,1)'>"
         "<label>Dim screen after</label><select onchange='d(this.value)'>%s</select>"
         "<label><input type=checkbox class=ck %s onchange='sw(this.checked)'>Show radar sweep</label>"
+        "<label>Sweep style</label><select onchange='ss(this.value)'>"
+        "<option value=0 %s>Extensive</option><option value=1 %s>Balanced</option><option value=2 %s>Smooth</option></select>"
+        "<small>Extensive: full glow trail. Balanced: shorter trail. Smooth: single line. All styles light up aircraft as the beam passes.</small><div id=sweepStatus></div>"
         "<label><input type=checkbox class=ck %s onchange='ti(this.checked)'>Aircraft icons by type</label>"
         "<label><input type=checkbox class=ck %s onchange='ap(this.checked)'>Show airports</label>"
         "<label><input type=checkbox class=ck %s onchange='hg(this.checked)'>Hide aircraft on the ground</label>"
@@ -1372,6 +1375,7 @@ static void handleRoot() {
         "document.getElementById('smsg').innerText='Custom sound removed.'})}"
         "function d(v){fetch('/idle?v='+v+'&save=1')}"
         "function sw(c){fetch('/sweep?v='+(c?1:0)+'&save=1')}"
+        "async function ss(v){let s=document.getElementById('sweepStatus');s.textContent='Saving...';try{let r=await fetch('/sweep?style='+v+'&save=1');if(!r.ok)throw Error();s.textContent='Saved';}catch(e){s.textContent='Could not save. Reload and try again.'}}"
         "function ap(c){fetch('/airports?v='+(c?1:0)+'&save=1')}"
         "function hg(c){fetch('/ground?v='+(c?1:0)+'&save=1')}"
         "function ma(v){fetch('/altmin?v='+v+'&save=1')}"
@@ -1447,6 +1451,7 @@ static void handleRoot() {
         g_settings.homeLat, g_settings.homeLon, gpsRow.c_str(), ropts.c_str(), topts.c_str(),
         tzopts.c_str(), cfopts.c_str(),
         g_brightnessDay, iopts.c_str(), g_showSweep ? "checked" : "",
+        radar::sweepStyle() == 0 ? "selected" : "", radar::sweepStyle() == 1 ? "selected" : "", radar::sweepStyle() == 2 ? "selected" : "",
         g_typeIcons ? "checked" : "",
         g_showAirports ? "checked" : "", g_hideGround ? "checked" : "", maopts.c_str(), g_milOnly ? "checked" : "",
         // order must track the HTML above: trails, max aircraft, large text, rotation,
@@ -1635,7 +1640,22 @@ static void handleUnits() {   // measurement units preset (live re-render)
     g_web.send(200, "text/plain", "ok");
 }
 
-static void handleSweep() {   // show/hide the rotating sweep line (live)
+static void handleSweep() {   // sweep settings apply live on the UI task
+    if (g_web.hasArg("style")) {
+        const String value = g_web.arg("style");
+        if (value != "0" && value != "1" && value != "2") {
+            g_web.send(400, "text/plain", "Invalid sweep style"); return;
+        }
+        const int style = value.toInt();
+        if (g_web.hasArg("save")) {
+            Preferences p;
+            if (!p.begin("capsuleradar", false)) { g_web.send(503, "text/plain", "Cannot save style"); return; }
+            const bool saved = p.putInt("sweepstyle", style) > 0;
+            p.end();
+            if (!saved) { g_web.send(503, "text/plain", "Cannot save style"); return; }
+        }
+        radar::setSweepStyle(style);
+    }
     if (g_web.hasArg("v")) {
         g_showSweep = g_web.arg("v").toInt() != 0;
         radar::setSweepEnabled(g_showSweep);          // loop()/core 1: safe to touch LVGL
@@ -2267,6 +2287,7 @@ void setup() {
         p.begin("capsuleradar", true);
         const int t = p.getInt("theme", THEME_PHOSPHOR);
         g_showSweep = p.getBool("sweep", true);
+        const int sweepStyle = p.getInt("sweepstyle", SWEEP_STYLE_DEFAULT);
         g_showAirports = p.getBool("airports", true);
 #if BOARD_HAS_SD
     g_sdEnabled = p.getBool("sdenable", true);
@@ -2281,6 +2302,7 @@ void setup() {
         p.end();
         radar::setTheme(t);
         ui_theme_changed();          // ...and once at boot for the restored theme
+        radar::setSweepStyle(sweepStyle >= 0 && sweepStyle <= 2 ? sweepStyle : SWEEP_STYLE_DEFAULT);
         radar::setSweepEnabled(g_showSweep);
         radar::setAirportsEnabled(g_showAirports);
         radar::setTrafficMode(g_trafficMode);

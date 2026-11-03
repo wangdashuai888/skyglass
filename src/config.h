@@ -1,7 +1,7 @@
 #pragma once
 // SkyGlass — build & user configuration.
 
-#define FW_VERSION "1.19.5"   // shown on the web config page + Stats screen; bump on release
+#define FW_VERSION "1.19.6"   // shown on the web config page + Stats screen; bump on release
 // ---------- Board selection ----------
 // Everything hardware-specific (screen geometry, pin map, which peripherals exist)
 // lives in src/boards/<board>.h. Pick one with a -D flag in platformio.ini; the
@@ -57,7 +57,7 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 #ifndef BACKLIGHT_MIN_ON
 #  define BACKLIGHT_MIN_ON  1
 #endif
-#define IDLE_DIM_MS         20000          // dim the screen after this long without a touch
+#define IDLE_DIM_MS         60000          // dim the screen after this long without a touch
 
 // ---------- ADS-B API (free, non-commercial) ----------
 #define ADSB_PRIMARY_HOST   "api.airplanes.live"   // GET /v2/point/{lat}/{lon}/{radius_nm}
@@ -116,7 +116,7 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 #define SLEEP_FEED_PARK_MS      100U
 
 // ---------- Lightweight radar sweep ----------
-// Thin solid beam by default; optional diagnostic wedge remains available.
+// Runtime styles select Extensive, Balanced (default), or Smooth.
 #ifndef SWEEP_MAX_STEP_PX
 #define SWEEP_MAX_STEP_PX 4.0f
 #endif
@@ -131,4 +131,17 @@ static const float RANGE_STEPS_KM[] = {1.60934f, 4.82803f, 10.0f, 20.0f, 30.0f, 
 #endif
 #define SWEEP_DIRTY_SEGMENTS 8
 #define SWEEP_LINE_WIDTH 2
+#define SWEEP_BALANCED_LINE_WIDTH 3
 #define SWEEP_DIRTY_PAD 3
+
+#define SWEEP_STYLE_DEFAULT 1  // 0 Extensive, 1 Balanced, 2 Smooth
+#define SWEEP_ORIGINAL_TRAIL_DEG 55.0f
+#define SWEEP_ORIGINAL_STEPS 18
+#define SWEEP_ORIGINAL_STEP_PX 11.0f
+#define SWEEP_BALANCED_TRAIL_DEG 20.0f
+#define SWEEP_BALANCED_STEPS 6
+#define SWEEP_BALANCED_STEP_PX 5.5f
+#define SWEEP_SMOOTH_STEP_PX 4.0f
+#define SWEEP_GLOW_DEG 24.0f
+#define SWEEP_GLOW_RADIUS 10
+#define SWEEP_GLOW_DAMAGE_RADIUS 16

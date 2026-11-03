@@ -78,6 +78,8 @@ void setLabelKeepOut(int slot, int x1, int y1, int x2, int y2);   // x2 < x1 cle
 void setStillMode(bool on);                     // park every looping animation (screenshot capture)
 void setSweepEnabled(bool on);                   // show/hide the rotating sweep line
 bool sweepEnabled();
+void setSweepStyle(int style); // 0 Extensive, 1 Balanced, 2 Smooth
+int sweepStyle();
 void setAirportsEnabled(bool on);                // show/hide airport markers on the scope
 bool airportsEnabled();
 
