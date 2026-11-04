@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 #include "weather_client.h"
 #include "config.h"
 #include <WiFi.h>
@@ -90,7 +91,7 @@ bool weather_fetch(double lat, double lon, WeatherSnapshot &out) {
     http.setConnectTimeout(3500);
     http.setTimeout(7000);
     if (!http.begin(client, url)) {
-        Serial.println("[weather] HTTP begin failed");
+        FirmwareLog.println("[weather] HTTP begin failed");
         client.stop();
         return false;
     }
@@ -100,7 +101,7 @@ bool weather_fetch(double lat, double lon, WeatherSnapshot &out) {
     if (status != 200) {
         char tls[128] = "";
         const int tlsCode = client.lastError(tls, sizeof(tls));
-        Serial.printf("[weather] HTTP %d: %s tls=%d '%s' heap=%u largest=%u psram=%u\n", status,
+        FirmwareLog.printf("[weather] HTTP %d: %s tls=%d '%s' heap=%u largest=%u psram=%u\n", status,
                       status < 0 ? http.errorToString(status).c_str() : "unexpected response",
                       tlsCode, tls, (unsigned)ESP.getFreeHeap(),
                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
@@ -112,7 +113,7 @@ bool weather_fetch(double lat, double lon, WeatherSnapshot &out) {
 
     PsramStream psramStream(49152); // 48 KB buffer in PSRAM
     if (!psramStream.isOk()) {
-        Serial.println("[weather] PSRAM stream allocation failed");
+        FirmwareLog.println("[weather] PSRAM stream allocation failed");
         http.end();
         client.stop();
         return false;
@@ -125,7 +126,7 @@ bool weather_fetch(double lat, double lon, WeatherSnapshot &out) {
     JsonDocument doc(&s_jsonPsram);
     DeserializationError err = deserializeJson(doc, psramStream);
     if (err) {
-        Serial.printf("[weather] JSON error: %s\n", err.c_str());
+        FirmwareLog.printf("[weather] JSON error: %s\n", err.c_str());
         return false;
     }
 
@@ -133,7 +134,7 @@ bool weather_fetch(double lat, double lon, WeatherSnapshot &out) {
     JsonObjectConst current = doc["current"].as<JsonObjectConst>();
     JsonObjectConst daily = doc["daily"].as<JsonObjectConst>();
     if (current.isNull() || daily.isNull()) {
-        Serial.println("[weather] response missing current/daily data");
+        FirmwareLog.println("[weather] response missing current/daily data");
         return false;
     }
 

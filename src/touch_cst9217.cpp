@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // CST9217 capacitive touch over I2C (Arduino). Ported from Waveshare's
 // esp_lcd_touch_cst9217: read 10 bytes from reg 0xD000, validate ACK 0xAB,
 // unpack the 12-bit X/Y of the first touch point. Single-touch is enough here.
@@ -37,9 +38,9 @@ bool touch_begin() {
     // comms check: a valid (even untouched) data read carries ACK 0xAB at byte 6
     uint8_t d[CST9217_DATA_LEN] = {0};
     if (cst_read_reg(CST9217_REG_DATA, d, CST9217_DATA_LEN) && d[6] == CST9217_ACK) {
-        Serial.println("[touch] CST9217 responding (ACK ok)");
+        FirmwareLog.println("[touch] CST9217 responding (ACK ok)");
     } else {
-        Serial.println("[touch] CST9217 not responding yet (will keep polling)");
+        FirmwareLog.println("[touch] CST9217 not responding yet (will keep polling)");
     }
     return true;
 }

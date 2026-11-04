@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // SkyGlass on the Waveshare ESP32-P4-WIFI6-Touch-LCD-4C — entry point.
 //
 // PORT IN PROGRESS. See docs/PORT_P4.md.
@@ -32,17 +33,17 @@ static void flush_null(lv_disp_drv_t *drv, const lv_area_t *, lv_color_t *) {
 void setup() {
     Serial.begin(115200);
     delay(200);
-    Serial.printf("[p4] SkyGlass %s on %s\n", FW_VERSION, BOARD_NAME);
-    Serial.printf("[p4] psram %u free\n", (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    FirmwareLog.printf("[p4] SkyGlass %s on %s\n", FW_VERSION, BOARD_NAME);
+    FirmwareLog.printf("[p4] psram %u free\n", (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
     lv_init();
     const size_t px = (size_t)SCREEN_W * 40;
     s_buf = (lv_color_t *)heap_caps_malloc(px * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    if (!s_buf) { Serial.println("[p4] draw buffer alloc failed"); return; }
+    if (!s_buf) { FirmwareLog.println("[p4] draw buffer alloc failed"); return; }
     lv_disp_draw_buf_init(&s_dbuf, s_buf, nullptr, px);
 
     const bool panelUp = display_p4_begin();
-    if (!panelUp) Serial.println("[p4] DSI bring-up failed; running headless");
+    if (!panelUp) FirmwareLog.println("[p4] DSI bring-up failed; running headless");
 
     lv_disp_drv_init(&s_drv);
     s_drv.hor_res  = SCREEN_W;
@@ -61,7 +62,7 @@ void setup() {
 
     // No tick timer needed: lv_conf.h sets LV_TICK_CUSTOM to millis(), same as the S3 build.
     ui_create();
-    Serial.printf("[p4] UI built at %dx%d\n", SCREEN_W, SCREEN_H);
+    FirmwareLog.printf("[p4] UI built at %dx%d\n", SCREEN_W, SCREEN_H);
 }
 
 void loop() {

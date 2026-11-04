@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // SkyGlass — entry point / glue. SKELETON: TODOs mark what to implement.
 // Order of work is in CLAUDE.md (milestones). Bring up the Waveshare demo first.
 #include <Arduino.h>
@@ -202,7 +203,7 @@ static uint32_t g_staWaitMs   = 0;
 static void wifi_portal_tick(void) {
     if (WiFi.status() == WL_CONNECTED) {
         if (g_setupApUp) {                       // real network is back; drop the portal
-            Serial.println("[wifi] station associated -> taking the setup AP down");
+            FirmwareLog.println("[wifi] station associated -> taking the setup AP down");
             WiFi.softAPdisconnect(true);
             WiFi.mode(WIFI_STA);
             g_setupApUp = false;
@@ -215,17 +216,17 @@ static void wifi_portal_tick(void) {
     if (g_staWaitMs == 0) { g_staWaitMs = millis(); return; }
     if (millis() - g_staWaitMs < WIFI_PORTAL_AFTER_MS) return;
 
-    Serial.printf("[wifi] no association after %lus -> raising setup AP '%s'\n",
+    FirmwareLog.printf("[wifi] no association after %lus -> raising setup AP '%s'\n",
                   (unsigned long)(WIFI_PORTAL_AFTER_MS / 1000), BOARD_SETUP_AP);
     // Keep the station alive so it can still find the stored network on its own.
     g_setupApUp = WiFi.mode(WIFI_AP_STA) && WiFi.softAP(BOARD_SETUP_AP);
     if (!g_setupApUp) g_setupApUp = WiFi.mode(WIFI_AP) && WiFi.softAP(BOARD_SETUP_AP);
     if (g_setupApUp) {
-        Serial.printf("[wifi] setup AP up: join '%s', open http://%s/\n",
+        FirmwareLog.printf("[wifi] setup AP up: join '%s', open http://%s/\n",
                       BOARD_SETUP_AP, WiFi.softAPIP().toString().c_str());
     } else {
         g_setupApFail = true;   // do not spin retrying a mode this radio will not enter
-        Serial.println("[wifi] setup AP FAILED - set credentials over serial: wifi <ssid> <password>");
+        FirmwareLog.println("[wifi] setup AP FAILED - set credentials over serial: wifi <ssid> <password>");
     }
 }
 #endif
@@ -255,9 +256,9 @@ static void adsb_task(void*) {
             // disable WiFi modem power-save: on a mains-powered desk gadget it just adds latency
             // and makes RSSI bounce (feed goes stale -> amber bars) even sitting next to the router.
             WiFi.setSleep(false);
-            Serial.printf("[adsb] WiFi up, IP %s\n", WiFi.localIP().toString().c_str());
+            FirmwareLog.printf("[adsb] WiFi up, IP %s\n", WiFi.localIP().toString().c_str());
             configTzTime(g_tz.c_str(), "pool.ntp.org", "time.nist.gov");  // local time (web-configurable TZ)
-            Serial.println("[web] config: http://" BOARD_HOSTNAME ".local/  (or the IP above)");
+            FirmwareLog.println("[web] config: http://" BOARD_HOSTNAME ".local/  (or the IP above)");
             nextWeatherAt = millis() + 5000UL; // let the first ADS-B poll complete before weather TLS
             nextCloudImageAt = millis() + 15000UL;
             nextWxRadarAt = millis() + 12000UL;
@@ -300,14 +301,14 @@ static void adsb_task(void*) {
             }
             const uint32_t stuckMs = millis() - lastFeedOk;
             if (!g_adsb.lastPollSkipped() && stuckMs > 180000UL) {
-                Serial.println("[adsb] feed stuck >180s after reassociating -> rebooting");
+                FirmwareLog.println("[adsb] feed stuck >180s after reassociating -> rebooting");
                 delay(100);
-                esp_rom_printf("\n*** RESTART: feed stuck >180s after reassociating ***\n");
+                FirmwareLog.printf("\n*** RESTART: feed stuck >180s after reassociating ***\n");
                 ESP.restart();
             } else if (!g_adsb.lastPollSkipped() && stuckMs > 45000UL && healStage < 1) {
                 // Cheapest rung: reassociate. Costs a second or two of link and nothing
                 // else, and on the P4 it is observed to return within a few seconds.
-                Serial.println("[adsb] feed stuck >45s -> reassociating");
+                FirmwareLog.println("[adsb] feed stuck >45s -> reassociating");
                 WiFi.reconnect();
                 healStage = 1;
                 healActionMs = millis();
@@ -332,7 +333,7 @@ static void adsb_task(void*) {
                 const bool fetched = g_adsb.poll(fresh);
                 if (g_deepSleep.load()) continue; // an already-running request may finish
                 if (fetched) {
-                    Serial.printf("[adsb] fetched %u aircraft from %s\n", (unsigned)fresh.size(), g_adsb.lastHost());
+                    FirmwareLog.printf("[adsb] fetched %u aircraft from %s\n", (unsigned)fresh.size(), g_adsb.lastHost());
                     ui_set_feed_source(g_adsb.lastPollWasLocal() ? 1 : 0);
                     failCount = 0;
                     g_feedOk = true;
@@ -361,13 +362,13 @@ static void adsb_task(void*) {
                         !fresh.empty(), receivedMs, AC_STALE_MS);
                     if (!publish) {
                         if (!retainingEmptySnapshot) {
-                            Serial.printf("[adsb] empty snapshot; retaining contacts for %u ms\n",
+                            FirmwareLog.printf("[adsb] empty snapshot; retaining contacts for %u ms\n",
                                           (unsigned)AC_STALE_MS);
                             retainingEmptySnapshot = true;
                         }
                     } else {
                         if (retainingEmptySnapshot && fresh.empty())
-                            Serial.println("[adsb] empty snapshot persisted; clearing stale contacts");
+                            FirmwareLog.println("[adsb] empty snapshot persisted; clearing stale contacts");
                         retainingEmptySnapshot = false;
                         if (xSemaphoreTake(g_ac_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
                             g_aircraft.swap(fresh);   // O(1) handoff: no per-Aircraft String copies under the lock
@@ -379,24 +380,24 @@ static void adsb_task(void*) {
                     // No request was due. Keep data freshness separate from network health.
                     if (millis() - g_adsb.lastOkMs() > ADSB_FEED_STALE_MS) g_feedOk = false;
                 } else {
-                    Serial.println("[adsb] poll failed");
+                    FirmwareLog.println("[adsb] poll failed");
                     if (++failCount >= 5) g_feedOk = false;   // sustained outage -> HUD warning
                 }
             }
             if (g_deepSleep.load()) continue;
             // Forecasts change slowly. Fetch only after the live ADS-B poll has had priority.
             if ((int32_t)(nowMs - nextWeatherAt) >= 0) {
-                Serial.printf("[weather] fetching %.5f, %.5f...\n",
+                FirmwareLog.printf("[weather] fetching %.5f, %.5f...\n",
                               g_settings.homeLat, g_settings.homeLon);
                 WeatherSnapshot forecast;
                 if (weather_fetch(g_settings.homeLat, g_settings.homeLon, forecast)) {
                     weather_store(forecast);
                     g_weatherDirty = true;
                     nextWeatherAt = millis() + WEATHER_REFRESH_MS;
-                    Serial.println("[weather] forecast updated");
+                    FirmwareLog.println("[weather] forecast updated");
                 } else {
                     nextWeatherAt = millis() + 60000UL;
-                    Serial.println("[weather] fetch failed; retrying in 60s");
+                    FirmwareLog.println("[weather] fetch failed; retrying in 60s");
                 }
             }
             if (g_deepSleep.load()) continue;
@@ -411,21 +412,21 @@ static void adsb_task(void*) {
                     // ten minutes and the fetcher skips what it already holds.
                     const int left = wx_radar_backlog();
                     nextWxRadarAt = millis() + (left > 0 ? 2500UL : WX_RADAR_REFRESH_MS);
-                    if (left > 0) Serial.printf("[wxradar] %d frames to go\n", left);
+                    if (left > 0) FirmwareLog.printf("[wxradar] %d frames to go\n", left);
                 } else {
                     nextWxRadarAt = millis() + 60000UL;
-                    Serial.println("[wxradar] fetch failed; retrying in 60s");
+                    FirmwareLog.println("[wxradar] fetch failed; retrying in 60s");
                 }
             }
             if (g_deepSleep.load()) continue;
             if ((int32_t)(nowMs - nextCloudImageAt) >= 0) {
-                Serial.println("[clouds] fetching EUMETSAT frame...");
+                FirmwareLog.println("[clouds] fetching EUMETSAT frame...");
                 if (cloud_image_fetch(g_settings.homeLat, g_settings.homeLon)) {
                     g_cloudImageDirty = true;
                     nextCloudImageAt = millis() + CLOUD_IMAGE_REFRESH_MS;
                 } else {
                     nextCloudImageAt = millis() + 60000UL;
-                    Serial.println("[clouds] fetch failed; retrying in 60s");
+                    FirmwareLog.println("[clouds] fetch failed; retrying in 60s");
                 }
             }
             if (g_deepSleep.load()) continue;
@@ -457,14 +458,14 @@ static void adsb_task(void*) {
                 RouteCoords rc;
                 if (route_cache_get(wantCall, from, sizeof(from), to, sizeof(to), &rc)) {
                     route_store_full(wantCall, from, to, rc);              // NVS hit, no network
-                    Serial.printf("[route] %s (cache): '%s' -> '%s'\n", wantCall, from, to);
+                    FirmwareLog.printf("[route] %s (cache): '%s' -> '%s'\n", wantCall, from, to);
                 } else if (route_fetch(wantCall, from, sizeof(from), to, sizeof(to), &rc)) {
                     route_store_full(wantCall, from, to, rc);
                     route_cache_put(wantCall, from, to, &rc);             // remember across reboots
-                    Serial.printf("[route] %s (net): '%s' -> '%s'\n", wantCall, from, to);
+                    FirmwareLog.printf("[route] %s (net): '%s' -> '%s'\n", wantCall, from, to);
                 } else {
                     route_store(wantCall, from, to);   // empty -> don't refetch this session
-                    Serial.printf("[route] %s: no route\n", wantCall);
+                    FirmwareLog.printf("[route] %s: no route\n", wantCall);
                 }
             }
             if (g_deepSleep.load()) continue;
@@ -647,11 +648,11 @@ static time_t utc_to_time(struct tm *utc) {
 // Seed the ESP system clock from the RTC so the clock/date are right before NTP.
 static void rtc_seed_clock() {
     struct tm utc;
-    if (!rtc_read(&utc)) { Serial.println("[rtc] no valid time stored"); return; }
+    if (!rtc_read(&utc)) { FirmwareLog.println("[rtc] no valid time stored"); return; }
     const time_t t = utc_to_time(&utc);
     struct timeval tv = { t, 0 };
     settimeofday(&tv, nullptr);
-    Serial.println("[rtc] system clock seeded from RTC");
+    FirmwareLog.println("[rtc] system clock seeded from RTC");
 }
 
 // Quiet-hours window test (minutes since local midnight; window may wrap midnight).
@@ -1319,6 +1320,9 @@ static void handleRoot() {
         "<a href=/power style='color:#9affc8'>Power, sleep and automatic timeouts</a>"
         "<p>Reconnect USB to turn SkyGlass on again.</p></div>"
 #endif
+        "<div class=card><div class=t>Diagnostics</div>"
+        "<a href=/log style='color:#9affc8'>Enable logging and view live logs</a>"
+        "<p>Logging is off by default. Turn it off after troubleshooting to reduce activity.</p></div>"
         "<div class=card><div class=t>Firmware</div>"
         "<p style='color:#9affc8;font-size:13px;margin:0 0 8px'>Running <b>v" FW_VERSION "</b></p>"
         "<div id=fwst style='font-size:13px;color:#9affc8;margin-bottom:8px'>checking&hellip;</div>"
@@ -1470,7 +1474,7 @@ static void handleRoot() {
     // A truncated page renders as a half-broken form rather than failing loudly, so say
     // so on serial — it means BUFSZ needs raising after adding controls.
     if (needed >= (int)BUFSZ)
-        Serial.printf("[web] config page truncated: needed %d bytes, buffer is %u\n",
+        FirmwareLog.printf("[web] config page truncated: needed %d bytes, buffer is %u\n",
                       needed, (unsigned)BUFSZ);
     g_web.send(200, "text/html", buf);
 }
@@ -1498,7 +1502,7 @@ static void handleSave() {
         "<meta http-equiv=refresh content='4;url=/'><body style='background:#06100a;color:#1dff86;"
         "font-family:sans-serif;padding:24px'>Saved. Restarting&hellip;</body>");
     delay(400);
-    esp_rom_printf("\n*** RESTART: settings saved ***\n");
+    FirmwareLog.printf("\n*** RESTART: settings saved ***\n");
     ESP.restart();
 }
 
@@ -1514,7 +1518,7 @@ static void handleWifiSave() {
         p.putString("wifiSsid", ss);
         p.putString("wifiPass", pw);
         p.end();
-        Serial.printf("[wifi] saved credentials for %s; rebooting\n", ss.c_str());
+        FirmwareLog.printf("[wifi] saved credentials for %s; rebooting\n", ss.c_str());
     }
     g_web.send(200, "text/html",
         "<meta http-equiv=refresh content='6;url=/'><body style='background:#06100a;color:#1dff86;"
@@ -1546,7 +1550,7 @@ static void handleWifi() {
         nvs_close(h);
     }
     delay(300);                     // let NVS finish committing before the reboot
-    esp_rom_printf("\n*** RESTART: wifi credentials saved ***\n");
+    FirmwareLog.printf("\n*** RESTART: wifi credentials saved ***\n");
     ESP.restart();
 }
 
@@ -1842,7 +1846,7 @@ static void handleAdsbLocal() {   // point the feed at a receiver on the local n
         p.begin("capsuleradar", false);
         p.putString("adsblocal", g_adsbLocal);
         p.end();
-        Serial.printf("[adsb] local receiver set to '%s'\n", g_adsbLocal.c_str());
+        FirmwareLog.printf("[adsb] local receiver set to '%s'\n", g_adsbLocal.c_str());
     }
     g_web.send(200, "text/plain", "ok");
 }
@@ -2053,7 +2057,7 @@ static bool g_soundUploadOk = false;
 static void handleSoundUpload() {
     HTTPUpload &up = g_web.upload();
     if (up.status == UPLOAD_FILE_START) {
-        Serial.printf("[wav] upload start: %s\n", up.filename.c_str());
+        FirmwareLog.printf("[wav] upload start: %s\n", up.filename.c_str());
         wav_upload_begin();
         g_soundUploadOk = false;
     } else if (up.status == UPLOAD_FILE_WRITE) {
@@ -2145,13 +2149,13 @@ static void handleUpdatePage() {
 static void handleUpdateUpload() {
     HTTPUpload &up = g_web.upload();
     if (up.status == UPLOAD_FILE_START) {
-        Serial.printf("[update] start: %s\n", up.filename.c_str());
-        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
+        FirmwareLog.printf("[update] start: %s\n", up.filename.c_str());
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(FirmwareLog);
     } else if (up.status == UPLOAD_FILE_WRITE) {
-        if (Update.write(up.buf, up.currentSize) != up.currentSize) Update.printError(Serial);
+        if (Update.write(up.buf, up.currentSize) != up.currentSize) Update.printError(FirmwareLog);
     } else if (up.status == UPLOAD_FILE_END) {
-        if (Update.end(true)) Serial.printf("[update] done: %u bytes\n", (unsigned)up.totalSize);
-        else Update.printError(Serial);
+        if (Update.end(true)) FirmwareLog.printf("[update] done: %u bytes\n", (unsigned)up.totalSize);
+        else Update.printError(FirmwareLog);
     }
 }
 
@@ -2223,8 +2227,14 @@ static void devToggleSet(int i, bool on) {
 
 void setup() {
     Serial.begin(115200);
+    firmware_log_begin();
+    {
+        Preferences logs; logs.begin("capsuleradar", true);
+        FirmwareLog.setEnabled(logs.getBool("debugLog", false));
+        logs.end();
+    }
     delay(200);
-    Serial.println("\nSkyGlass boot");
+    FirmwareLog.println("\nSkyGlass boot");
 #if BOARD_HAS_PMIC
     powerBoot();
     loadSleepSettings();
@@ -2237,9 +2247,9 @@ void setup() {
 #else
     if (PIN_I2C_SDA < 0) {
 #endif
-        Serial.println("[!] Pins in config.h are still -1. Copy them from the Waveshare demo.");
+        FirmwareLog.println("[!] Pins in config.h are still -1. Copy them from the Waveshare demo.");
     }
-    Serial.printf("PSRAM: %u bytes free\n", (unsigned)ESP.getFreePsram());
+    FirmwareLog.printf("PSRAM: %u bytes free\n", (unsigned)ESP.getFreePsram());
 
     // Mount before loadSettings(): the default sound pack depends on whether a custom
     // sound exists, and an uploaded one only becomes visible once the filesystem is up.
@@ -2256,10 +2266,10 @@ void setup() {
         wdt.trigger_panic = true;          // panic prints the backtrace, then resets
         if (esp_task_wdt_init(&wdt) == ESP_ERR_INVALID_STATE) esp_task_wdt_reconfigure(&wdt);
         esp_task_wdt_add(NULL);            // setup() runs on the loop task
-        esp_rom_printf("[wdt] loop task watchdog armed (30s)\n");
+        FirmwareLog.printf("[wdt] loop task watchdog armed (30s)\n");
     }
 
-    if (!LittleFS.begin(true)) Serial.println("[fs] LittleFS mount failed (uploads unavailable)");
+    if (!LittleFS.begin(true)) FirmwareLog.println("[fs] LittleFS mount failed (uploads unavailable)");
     else audio_load_sample();   // restore a previously uploaded alert sound
     // SD is probed from loop() a few seconds in, not here. Nothing depends on it, and
     // doing it during setup() meant a fault in the card path stopped the board before
@@ -2278,7 +2288,7 @@ void setup() {
     ui_set_wx_zoom_cb([](int z) { setWxZoom(z, true); });
 
     if (!display::begin()) {
-        Serial.println("[!] display::begin() failed — check QSPI pins / power.");
+        FirmwareLog.println("[!] display::begin() failed — check QSPI pins / power.");
     }
 
     // restore the saved theme, then persist any future change
@@ -2348,6 +2358,7 @@ void setup() {
     // First boot opens the "SkyGlass-Setup" AP to enter WiFi creds. Non-blocking
     // so the radar keeps animating while you configure WiFi from your phone.
 #if BOARD_HAS_WIFIMANAGER
+    g_wm.setDebugOutput(false); // application logger owns switchable diagnostics
     g_wm.setConfigPortalBlocking(false);
     g_wm.setTitle("SkyGlass");
     // light phosphor-green theme for the captive portal (small CSS, injected into <head>)
@@ -2365,13 +2376,13 @@ void setup() {
     // own port-80 server (and mDNS) don't cleanly hand over to our web server / STA
     // interface in non-blocking mode, so the config page is flaky until a fresh boot.
     g_wm.setSaveConfigCallback([]() {
-        Serial.println("[wifi] new credentials saved -> rebooting for a clean web/mDNS start");
+        FirmwareLog.println("[wifi] new credentials saved -> rebooting for a clean web/mDNS start");
         g_rebootAtMs = millis() + 2500;   // let the portal deliver its 'saved' page first
     });
     if (g_wm.autoConnect(BOARD_SETUP_AP))
-        Serial.println("[wifi] connected");
+        FirmwareLog.println("[wifi] connected");
     else
-        Serial.println("[wifi] config portal open - join 'SkyGlass-Setup' to set WiFi; UI stays live");
+        FirmwareLog.println("[wifi] config portal open - join 'SkyGlass-Setup' to set WiFi; UI stays live");
 #else
     // No WiFiManager on this board. Connect with whatever the config page stored; if
     // nothing is stored yet, raise a SoftAP so that page is reachable to enter it.
@@ -2382,7 +2393,7 @@ void setup() {
         if (ss.length()) {
             WiFi.mode(WIFI_STA);
             WiFi.begin(ss.c_str(), pw.c_str());
-            Serial.printf("[wifi] connecting to %s\n", ss.c_str());
+            FirmwareLog.printf("[wifi] connecting to %s\n", ss.c_str());
         } else {
             // Check the result. On this board the radio is an ESP32-C6 over esp_hosted,
             // and AP mode is not a given -- if softAP() fails there is simply no network
@@ -2390,10 +2401,10 @@ void setup() {
             // page being broken.
             const bool apOk = WiFi.mode(WIFI_AP) && WiFi.softAP(BOARD_SETUP_AP);
             if (apOk) {
-                Serial.printf("[wifi] SoftAP up: join '" BOARD_SETUP_AP "', open http://%s/\n",
+                FirmwareLog.printf("[wifi] SoftAP up: join '" BOARD_SETUP_AP "', open http://%s/\n",
                               WiFi.softAPIP().toString().c_str());
             } else {
-                Serial.println("[wifi] SoftAP FAILED - no setup network. Set credentials over "
+                FirmwareLog.println("[wifi] SoftAP FAILED - no setup network. Set credentials over "
                                "serial instead: send  wifi <ssid> <password>");
             }
         }
@@ -2418,6 +2429,48 @@ void setup() {
 
     // configuration web page (http://<board hostname>.local/)
     g_web.on("/", handleRoot);
+    g_web.on("/log", HTTP_GET, []() {
+        g_web.sendHeader("Cache-Control", "no-store");
+        String page = R"HTML(<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>SkyGlass logs</title>
+<style>body{background:#07130d;color:#cfeedd;font:16px system-ui;margin:20px}a{color:#5f9}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}button{padding:8px}</style>
+<a href="/">Settings</a><h2>Diagnostic logs</h2>
+<form method="post" action="/logging"><label><input type="checkbox" name="enabled" value="1" )HTML";
+        if (FirmwareLog.enabled()) page += "checked";
+        page += R"HTML(> Enable diagnostic logging</label> <button>Save</button></form>
+<p>Off by default. Includes firmware events, enabled ESP system logs and raw GPS messages.
+Recent history stays in RAM; switching off clears it. The setting survives restart.</p>
+<p>Logging and live refresh add activity. Turn off when finished. Logs may contain location and network details.</p>
+<button id="pause">Pause</button> <a href="/log.txt">Plain text / copy log</a>
+<p id="status"></p><pre id="output">Loading...</pre>
+<script>let paused=false;document.querySelector('#pause').onclick=function(){paused=!paused;this.textContent=paused?'Resume':'Pause'};
+async function refresh(){if(!paused){try{const r=await fetch('/log.txt',{cache:'no-store'});if(!r.ok)throw Error(r.status);document.querySelector('#output').textContent=await r.text();document.querySelector('#status').textContent='Updated '+new Date().toLocaleTimeString()}catch(e){document.querySelector('#status').textContent='Connection lost; retrying...'}}setTimeout(refresh,2000)}if(document.querySelector('[name=enabled]').checked)refresh();else document.querySelector('#output').textContent='Logging is off.';</script>)HTML";
+        g_web.send(200, "text/html", page);
+    });
+    g_web.on("/logging", HTTP_POST, []() {
+        const bool enabled = g_web.arg("enabled") == "1";
+        Preferences p;
+        if (!p.begin("capsuleradar", false)) {
+            g_web.send(500, "text/plain", "Could not open settings"); return;
+        }
+        const bool saved = p.putBool("debugLog", enabled) > 0;
+        p.end();
+        if (!saved) { g_web.send(500, "text/plain", "Could not save logging setting"); return; }
+        FirmwareLog.setEnabled(enabled);
+        FirmwareLog.printf("[log] enabled at %lus\n", (unsigned long)(millis() / 1000));
+        g_web.sendHeader("Location", "/log");
+        g_web.send(303, "text/plain", "Saved");
+    });
+    g_web.on("/log.txt", HTTP_GET, []() {
+        g_web.sendHeader("Cache-Control", "no-store");
+        if (!FirmwareLog.enabled()) {
+            g_web.send(200, "text/plain", "Logging is off. Enable it on /log to capture diagnostics.\n");
+            return;
+        }
+        g_web.send(200, "text/plain", String("GPS location enabled: ") +
+                   (g_useGps ? "yes\n" : "no\n") + gps_debug_snapshot() +
+                   "\nRecent firmware / raw GPS logs:\n" + FirmwareLog.snapshot());
+    });
 #if BOARD_HAS_PMIC
     g_web.on("/power", HTTP_GET, handlePower);
     g_web.on("/power", HTTP_POST, handlePower);
@@ -2544,13 +2597,13 @@ sd_counters(&sdHit, &sdApp, &sdRdE);
             const bool ok = !Update.hasError();
             g_web.send(200, "text/plain", ok ? "OK" : "FAIL");
             delay(800);
-            esp_rom_printf("\n*** RESTART: firmware update installed ***\n");
+            FirmwareLog.printf("\n*** RESTART: firmware update installed ***\n");
             if (ok) ESP.restart();
         },
         handleUpdateUpload);
     g_web.begin();
 
-    Serial.println("setup done");
+    FirmwareLog.println("setup done");
 }
 
 // Serial credential entry. Exists because the P4 has no captive portal and its SoftAP
@@ -2570,9 +2623,9 @@ static void pollSerialConfig() {
     p.putString("wifiSsid", ss);
     p.putString("wifiPass", pw);
     p.end();
-    Serial.printf("[wifi] stored SSID '%s'; rebooting\n", ss.c_str());
+    FirmwareLog.printf("[wifi] stored SSID '%s'; rebooting\n", ss.c_str());
     delay(300);
-    esp_rom_printf("\n*** RESTART: scheduled reboot request ***\n");
+    FirmwareLog.printf("\n*** RESTART: scheduled reboot request ***\n");
     ESP.restart();
 }
 
@@ -2615,7 +2668,7 @@ void loop() {
         ArduinoOTA.begin();
         MDNS.addService("http", "tcp", 80);            // advertise the config web page
         otaUp = true;
-        Serial.println("[ota] ready: pio run -e esp32-s3-amoled-175-ota -t upload");
+        FirmwareLog.println("[ota] ready: pio run -e esp32-s3-amoled-175-ota -t upload");
     }
     if (otaUp) ArduinoOTA.handle();
 
@@ -2657,7 +2710,7 @@ void loop() {
         const uint32_t fr = display_frames();
         const unsigned fps = (fr - lastFrames) / 5;
         lastFrames = fr;
-        Serial.printf("[mem] heap %u (min %u, biggest %u) | psram %u free | up %lus | aircraft %d | fps %u\n",
+        FirmwareLog.printf("[mem] heap %u (min %u, biggest %u) | psram %u free | up %lus | aircraft %d | fps %u\n",
                       (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                       (unsigned)ESP.getFreePsram(), (unsigned long)(millis() / 1000),
@@ -2718,19 +2771,23 @@ void loop() {
             time_t now = time(nullptr);
             struct tm utc;
             gmtime_r(&now, &utc);
-            if (rtc_write(&utc)) { g_rtcSynced = true; Serial.println("[rtc] saved NTP time"); }
+            if (rtc_write(&utc)) { g_rtcSynced = true; FirmwareLog.println("[rtc] saved NTP time"); }
         }
-        // GPS auto-location (-G variant): re-centre the radar when the fix moves enough.
-        if (g_useGps) {
+        // Drain GPS continuously; apply the first fix immediately, then once a minute.
+        static bool gpsApplied = false;
+        static uint32_t lastGpsApply = 0;
+        if (!g_useGps) gpsApplied = false;
+        if (g_useGps && (!gpsApplied || millis() - lastGpsApply >= 60000)) {
             double glat, glon;
-            if (gps_location(&glat, &glon) &&
-                geo::haversineKm(g_settings.homeLat, g_settings.homeLon, glat, glon) > 1.0) {
-                g_settings.homeLat = glat; g_settings.homeLon = glon;   // radar/coastline recenter
-                // re-query the new area — set the radius too (same formula as boot/zoom), or
-                // adsb_task would re-begin with a stale/zero g_requeryKm and fetch 0 aircraft.
-                g_requeryKm = queryRadiusKm();
-                g_requery = true;                                       // adsb_task re-queries the new area
-                Serial.printf("[gps] re-centred to %.4f, %.4f\n", glat, glon);
+            if (gps_location(&glat, &glon)) {
+                gpsApplied = true;
+                lastGpsApply = millis();
+                if (geo::haversineKm(g_settings.homeLat, g_settings.homeLon, glat, glon) > 1.0) {
+                    g_settings.homeLat = glat; g_settings.homeLon = glon;
+                    g_requeryKm = queryRadiusKm();
+                    g_requery = true;
+                    FirmwareLog.printf("[gps] re-centred to %.4f, %.4f\n", glat, glon);
+                }
             }
         }
     }

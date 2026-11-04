@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 #include "wav_upload.h"
 #include "audio.h"
 #include <Arduino.h>
@@ -164,7 +165,7 @@ void wav_upload_data(const uint8_t *data, size_t len) {
                 s_ratio = (float)s_rate / (float)OUT_RATE;
                 s_hdrGot = 0;
                 s_state = W_CHUNK_HDR;
-                Serial.printf("[wav] %u Hz, %u ch, %u-bit\n",
+                FirmwareLog.printf("[wav] %u Hz, %u ch, %u-bit\n",
                               (unsigned)s_rate, (unsigned)s_channels, (unsigned)s_bits);
             }
             break;
@@ -244,7 +245,7 @@ bool wav_upload_end(void) {
 
     // Hand the buffer straight to the audio layer — no need to read it back again.
     audio_adopt_sample(pcm, s_written);
-    Serial.printf("[wav] saved %u samples (%.2fs)%s\n", (unsigned)s_written,
+    FirmwareLog.printf("[wav] saved %u samples (%.2fs)%s\n", (unsigned)s_written,
                   s_written / (double)OUT_RATE, s_truncated ? " [truncated]" : "");
     return true;
 }

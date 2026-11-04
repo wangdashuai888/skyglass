@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // LC76G GNSS over the shared I2C bus (Quectel I2C-NMEA protocol).
 // Verified on the ESP32-S3-Touch-AMOLED-1.75-G. What this protocol needed (figured out from
 // Waveshare's RP2350 `04_GPS_I2C` demo + on-hardware probing):
@@ -14,6 +15,28 @@
 #include "config.h"
 #include <Arduino.h>
 #include <TinyGPS++.h>
+
+static uint32_t s_lastByteMs = 0;
+static bool s_received = false;
+static void debugEvent(const char *message) {
+    FirmwareLog.printf("[gps %lus] %s\n", (unsigned long)(millis() / 1000), message);
+}
+static void receiveChar(TinyGPSPlus &gps, char c) {
+    s_received = true;
+    s_lastByteMs = millis();
+    // Buffer one raw sentence to avoid taking a cross-core log lock for every byte.
+    static char sentence[160];
+    static size_t used = 0;
+    if (FirmwareLog.enabled()) {
+        if (c == '$') used = 0;
+        sentence[used++] = c;
+        if (c == '\n' || used == sizeof(sentence)) {
+            FirmwareLog.write((const uint8_t *)sentence, used);
+            used = 0;
+        }
+    } else used = 0;
+    gps.encode(c);
+}
 
 // ---------------------------------------------------------------------------------
 // Two backends behind one API. A board defines PIN_GPS_RX when it has a plain NMEA
@@ -35,7 +58,7 @@ bool gps_begin() {
     // a board with nothing plugged into the header must report "no GPS", not "broken GPS".
     // The module emits sentences within a second or two of power-up even without a fix,
     // so gps_poll() promotes s_present the moment it parses a valid one.
-    Serial.printf("[gps] UART%d listening on RX=%d TX=%d @ %d baud\n",
+    FirmwareLog.printf("[gps] UART%d listening on RX=%d TX=%d @ %d baud\n",
                   (int)GPS_UART_NUM, (int)PIN_GPS_RX, (int)PIN_GPS_TX, (int)GPS_BAUD);
     return true;
 }
@@ -46,14 +69,14 @@ void gps_poll() {
     // Non-blocking: drain whatever arrived since the last loop. At 9600 baud that is about
     // one sentence per call, which costs nothing on the render core.
     int guard = 512;                       // never let a noisy line monopolise the loop
-    while (s_ser.available() && guard-- > 0) s_gps.encode((char)s_ser.read());
+    while (s_ser.available() && guard-- > 0) receiveChar(s_gps, (char)s_ser.read());
 
     // Present = at least one complete, checksum-valid sentence has been parsed. That is
     // true well before there is a position fix, which is what we want: the screen should
     // say "acquiring" rather than "no GPS" while the module is still finding satellites.
     if (!s_present && s_gps.passedChecksum() > 0) {
         s_present = true;
-        Serial.println("[gps] NMEA detected");
+        FirmwareLog.println("[gps] NMEA detected");
     }
 
     static uint32_t lg = 0;
@@ -61,7 +84,7 @@ void gps_poll() {
     if (now - lg > 8000) { lg = now;
         // Same diagnostic ladder as the I2C path: chars=0 means nothing is arriving (check
         // the wiring or swap TX/RX); chars>0 with fix=0 means valid data but no lock yet.
-        Serial.printf("[gps] chars=%lu sent=%lu csErr=%lu sats=%d fix=%d\n",
+        FirmwareLog.printf("[gps] chars=%lu sent=%lu csErr=%lu sats=%d fix=%d\n",
                       (unsigned long)s_gps.charsProcessed(), (unsigned long)s_gps.sentencesWithFix(),
                       (unsigned long)s_gps.failedChecksum(), (int)s_gps.satellites.value(),
                       (int)gps_has_fix());
@@ -90,13 +113,10 @@ int gps_satellites() {
 #define GPS_ADDR_W      0x50
 #define GPS_ADDR_R      0x54
 #define GPS_SETTLE_MS   100        // settle between each protocol step (LC76G is fussy)
-#define GPS_READ_MAX    720        // max bytes drained per transaction (kept small: a big Wire RX
-                                   //   buffer steals the contiguous internal RAM the TLS feed needs)
-#define GPS_BUF         768        // fixed Wire RX buffer (>= GPS_READ_MAX); set once, never resized
-#define GPS_POLL_MS     2000       // poll often enough that a 720 B read keeps up with NMEA output
-#define GPS_POLL_FIX_MS 60000      // once fixed, home is set — back right off (rare blocking hitch)
-#define GPS_FIX_TTL_MS  70000      // how long a fix stays "valid" — must exceed GPS_POLL_FIX_MS so the
-                                   //   fix doesn't expire between the 60 s polls (else it re-polls early)
+#define GPS_READ_MAX    4096       // drain the NMEA queue before it backs up (upstream issue #24)
+#define GPS_BUF         4096       // allocate once at startup, before TLS; never resize at runtime
+#define GPS_POLL_MS     1000       // keep draining every second, including after acquiring a fix
+#define GPS_FIX_TTL_MS  70000      // maximum age of a usable position
 #define GPS_I2C_HZ      100000     // the read protocol is unreliable at the 400 kHz bus default
 #define GPS_BUS_HZ      400000     // restore the shared bus to this after each GPS transaction
 #define GPS_TIMEOUT_MS  1000       // the module clock-stretches while preparing data; 50 ms (default) times out
@@ -133,7 +153,10 @@ static int gps_drain() {
         }
         delay(15);
     }
-    if (avail == 0 || avail > 200000) return 0;       // nothing queued / garbage length
+    if (avail == 0 || avail > 200000) {
+        debugEvent("I2C: no queued bytes, failed length query, or invalid length");
+        return 0;
+    }
 
     // 2) ask for at most one bufferful; the command echoes the count we will read.
     const uint32_t want = avail < GPS_READ_MAX ? avail : GPS_READ_MAX;
@@ -142,12 +165,16 @@ static int gps_drain() {
                              (uint8_t)(want >> 16), (uint8_t)(want >> 24) };
     delay(GPS_SETTLE_MS);                              // <-- without this gap the cmd write gets NACKed
     Wire.beginTransmission(GPS_ADDR_W); Wire.write(cmd, sizeof(cmd));
-    if (Wire.endTransmission() != 0) return 0;
+    if (Wire.endTransmission() != 0) {
+        debugEvent("I2C: read-data command failed");
+        return 0;
+    }
 
     // 3) read straight into the NMEA parser (no Wire.setBufferSize here — see file header)
     delay(GPS_SETTLE_MS);
     const int got = Wire.requestFrom((uint8_t)GPS_ADDR_R, (size_t)want);
-    for (int i = 0; i < got; ++i) s_gps.encode((char)Wire.read());
+    if (got != (int)want) debugEvent("I2C: short data read");
+    for (int i = 0; i < got; ++i) receiveChar(s_gps, (char)Wire.read());
     return got;
 }
 
@@ -158,7 +185,8 @@ bool gps_begin() {
     Wire.write(QLEN, sizeof(QLEN));
     s_present = (Wire.endTransmission() == 0);        // 0x50 ACKs only on the -G variant
     if (s_present) Wire.setBufferSize(GPS_BUF);       // sized ONCE; never resized at runtime
-    Serial.printf("[gps] LC76G %s\n", s_present ? "detected on I2C" : "not present");
+    FirmwareLog.printf("[gps] LC76G %s\n", s_present ? "detected on I2C" : "not present");
+    debugEvent(s_present ? "LC76G detected on I2C" : "LC76G not detected on I2C");
     return s_present;
 }
 
@@ -168,8 +196,7 @@ void gps_poll() {
     if (!s_present) return;
     static uint32_t last = 0;
     const uint32_t now = millis();
-    const uint32_t interval = gps_has_fix() ? GPS_POLL_FIX_MS : GPS_POLL_MS;
-    if (last != 0 && now - last < interval) return;
+    if (last != 0 && now - last < GPS_POLL_MS) return;
     last = now;
 
     Wire.setClock(GPS_I2C_HZ); Wire.setTimeOut(GPS_TIMEOUT_MS);   // LC76G read path: 100 kHz + tolerate clock-stretch
@@ -180,7 +207,7 @@ void gps_poll() {
     // data, just no satellite lock yet (needs clear sky / a few min on a cold start).
     static uint32_t lg = 0;
     if (now - lg > 8000) { lg = now;
-        Serial.printf("[gps] chars=%lu sent=%lu csErr=%lu sats=%d fix=%d\n",
+        FirmwareLog.printf("[gps] chars=%lu sent=%lu csErr=%lu sats=%d fix=%d\n",
                       (unsigned long)s_gps.charsProcessed(), (unsigned long)s_gps.sentencesWithFix(),
                       (unsigned long)s_gps.failedChecksum(), (int)s_gps.satellites.value(),
                       (int)gps_has_fix());
@@ -203,3 +230,21 @@ int gps_satellites() {
 }
 
 #endif  // PIN_GPS_RX
+
+String gps_debug_snapshot() {
+    char stats[640];
+    snprintf(stats, sizeof(stats),
+        "SkyGlass %s | uptime: %lus\nGPS detected: %s | recent fix: %s\n"
+        "Characters: %lu | valid checksums: %lu | failed checksums: %lu\n"
+        "Sentences with fix: %lu | satellites used: %d\n"
+        "Data received: %s | last byte age: %lu ms | position age: %lu ms\n"
+        "Position (last parsed): %.6f, %.6f\n",
+        FW_VERSION, (unsigned long)(millis() / 1000),
+        gps_present() ? "yes" : "no", gps_has_fix() ? "yes" : "no",
+        (unsigned long)s_gps.charsProcessed(), (unsigned long)s_gps.passedChecksum(),
+        (unsigned long)s_gps.failedChecksum(), (unsigned long)s_gps.sentencesWithFix(),
+        gps_satellites(), s_received ? "yes" : "no",
+        s_received ? (unsigned long)(millis() - s_lastByteMs) : 0UL,
+        (unsigned long)s_gps.location.age(), s_gps.location.lat(), s_gps.location.lng());
+    return String(stats);
+}

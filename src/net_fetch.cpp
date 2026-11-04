@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // Shared streamed-download helper (see net_fetch.h). Mirrors the proven pattern in
 // photo_client.cpp: Content-Length -> stream into PSRAM; chunked -> getString decode.
 #include "net_fetch.h"
@@ -35,7 +36,7 @@ bool net_fetch_psram(const char *url, const char *userAgent,
 
     TlsSlot slot(3000);
     if (!slot.held) {
-        Serial.println("[net] TLS slot busy, postponing fetch");
+        FirmwareLog.println("[net] TLS slot busy, postponing fetch");
         return false;
     }
 
@@ -49,7 +50,7 @@ bool net_fetch_psram(const char *url, const char *userAgent,
     if (userAgent) http.setUserAgent(userAgent);
 
     const int code = http.GET();
-    if (code != 200) { Serial.printf("[net] HTTP %d\n", code); http.end(); cli.stop(); return false; }
+    if (code != 200) { FirmwareLog.printf("[net] HTTP %d\n", code); http.end(); cli.stop(); return false; }
 
     const int len = http.getSize();           // >0 = Content-Length; -1 = chunked/unknown
     uint8_t *buf = nullptr;

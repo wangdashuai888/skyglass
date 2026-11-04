@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 #include "updater.h"
 #include "config.h"
 #include "ui.h"
@@ -152,7 +153,7 @@ static void do_check(void) {
 
     PsramStream psramStream(4096); // 4 KB buffer in PSRAM
     if (!psramStream.isOk()) {
-        Serial.println("[update] PSRAM stream allocation failed");
+        FirmwareLog.println("[update] PSRAM stream allocation failed");
         http.end();
         cli.stop();
         set_status("update check failed (memory)");
@@ -179,13 +180,13 @@ static void do_check(void) {
     if (remote < 0)          set_status("update server returned no version");
     else if (remote > local) { char m[64]; snprintf(m, sizeof(m), "v%s available", ver); set_status(m); }
     else                     set_status("up to date");
-    Serial.printf("[update] local v%s, server v%s -> %s\n",
+    FirmwareLog.printf("[update] local v%s, server v%s -> %s\n",
                   FW_VERSION, ver, (remote > local) ? "update available" : "current");
 }
 
 // --- install: stream the image into the inactive OTA slot -------------------------
 static void do_install(void) {
-    Serial.println("[update] downloading firmware...");
+    FirmwareLog.println("[update] downloading firmware...");
     set_status("downloading...");
     ui_show_flash_screen("Downloading update...", 0);
 
@@ -207,7 +208,7 @@ static void do_install(void) {
         http.end();
         cli.stop();
         set_status("not enough space for the update");
-        Serial.printf("[update] Update.begin(%d) failed\n", total);
+        FirmwareLog.printf("[update] Update.begin(%d) failed\n", total);
         return;
     }
 
@@ -232,7 +233,7 @@ static void do_install(void) {
                     char m[48]; snprintf(m, sizeof(m), "Installing... %d%%", pct);
                     set_status(m);
                     ui_show_flash_screen(m, pct);
-                    if (pct % 10 == 0) Serial.printf("[update] %d%%\n", pct);
+                    if (pct % 10 == 0) FirmwareLog.printf("[update] %d%%\n", pct);
                 }
             }
         } else if (!http.connected() || millis() - lastData > 20000) {
@@ -246,10 +247,10 @@ static void do_install(void) {
     if (written != total || !Update.end(true)) {
         Update.abort();
         set_status("update failed; keeping current firmware");
-        Serial.printf("[update] failed after %d/%d bytes\n", written, total);
+        FirmwareLog.printf("[update] failed after %d/%d bytes\n", written, total);
         return;
     }
-    Serial.println("[update] installed; rebooting");
+    FirmwareLog.println("[update] installed; rebooting");
     set_status("installed - rebooting");
     ui_show_flash_screen("Rebooting device...", 100);
     delay(600);

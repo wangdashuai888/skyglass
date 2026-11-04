@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 #include "wx_radar_client.h"
 #include "wx_radar.h"
 #include "net_fetch.h"
@@ -23,9 +24,9 @@ static int s_maxX = -1, s_maxY = -1;
 static bool ensure_decoder(void) {
     if (s_png) return true;
     void *mem = heap_caps_malloc(sizeof(PNG), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!mem) { Serial.println("[wxradar] PSRAM decoder allocation failed"); return false; }
+    if (!mem) { FirmwareLog.println("[wxradar] PSRAM decoder allocation failed"); return false; }
     s_png = new (mem) PNG();
-    Serial.printf("[wxradar] PNG decoder in PSRAM (%u bytes)\n", (unsigned)sizeof(PNG));
+    FirmwareLog.printf("[wxradar] PNG decoder in PSRAM (%u bytes)\n", (unsigned)sizeof(PNG));
     return true;
 }
 
@@ -205,7 +206,7 @@ static bool https_get_json(const char *url, JsonDocument &doc, int timeoutMs) {
     if (status != 200) {
         char tls[128] = "";
         const int tlsCode = client.lastError(tls, sizeof(tls));
-        Serial.printf("[wxradar] HTTP %d tls=%d '%s' heap=%u largest=%u psram=%u\n",
+        FirmwareLog.printf("[wxradar] HTTP %d tls=%d '%s' heap=%u largest=%u psram=%u\n",
                       status, tlsCode, tls, (unsigned)ESP.getFreeHeap(),
                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                       (unsigned)ESP.getFreePsram());
@@ -216,7 +217,7 @@ static bool https_get_json(const char *url, JsonDocument &doc, int timeoutMs) {
 
     PsramStream psramStream(49152); // 48 KB buffer in PSRAM
     if (!psramStream.isOk()) {
-        Serial.println("[wxradar] PSRAM stream allocation failed");
+        FirmwareLog.println("[wxradar] PSRAM stream allocation failed");
         http.end();
         client.stop();
         return false;
@@ -235,11 +236,11 @@ bool wx_radar_fetch(double lat, double lon) {
 
     JsonDocument doc(&s_jsonPsram);
     if (!https_get_json("https://api.rainviewer.com/public/weather-maps.json", doc, 6500)) {
-        Serial.println("[wxradar] metadata fetch failed"); return false;
+        FirmwareLog.println("[wxradar] metadata fetch failed"); return false;
     }
     const char *host = doc["host"] | "";
     JsonArrayConst past = doc["radar"]["past"].as<JsonArrayConst>();
-    if (!host[0] || past.size() == 0) { Serial.println("[wxradar] no radar frames"); return false; }
+    if (!host[0] || past.size() == 0) { FirmwareLog.println("[wxradar] no radar frames"); return false; }
 
     // Fetch ONE frame we do not already hold, newest first, so the loop's most useful
     // frames land soonest and the backlog fills over successive polls. Downloading all
@@ -269,7 +270,7 @@ bool wx_radar_fetch(double lat, double lon) {
     // A 768 px tile runs about 220 KB and a 1024 about 350; the old 260 KB ceiling was
     // sized for the 512 px one and would reject anything bigger as over-length.
     if (!net_fetch_psram(url, ADSB_USER_AGENT, &image, &imageLen, 480000, 3500, 8500)) {
-        Serial.println("[wxradar] tile fetch failed"); return false;
+        FirmwareLog.println("[wxradar] tile fetch failed"); return false;
     }
     memset(wx_radar_back_buffer(), 0, WX_RADAR_SIZE * WX_RADAR_SIZE * sizeof(uint16_t));
     s_decodedPixels = 0;
@@ -278,26 +279,26 @@ bool wx_radar_fetch(double lat, double lon) {
     s_maxX = s_maxY = -1;
     const int opened = s_png->openRAM(image, imageLen, radar_png_line);
     if (opened != PNG_SUCCESS) {
-        Serial.printf("[wxradar] PNG open error %d\n", opened);
+        FirmwareLog.printf("[wxradar] PNG open error %d\n", opened);
         heap_caps_free(image); return false;
     }
     s_lastW = s_png->getWidth(); s_lastH = s_png->getHeight();
-    Serial.printf("[wxradar] PNG %dx%d bpp=%d type=%d alpha=%d\n",
+    FirmwareLog.printf("[wxradar] PNG %dx%d bpp=%d type=%d alpha=%d\n",
                   s_png->getWidth(), s_png->getHeight(), s_png->getBpp(),
                   s_png->getPixelType(), s_png->hasAlpha());
     if (s_png->getWidth() != WX_RADAR_SOURCE_SIZE || s_png->getHeight() != WX_RADAR_SOURCE_SIZE) {
-        Serial.println("[wxradar] unexpected tile dimensions");
+        FirmwareLog.println("[wxradar] unexpected tile dimensions");
         s_png->close(); heap_caps_free(image); return false;
     }
     const int decoded = s_png->decode(nullptr, 0);
     s_png->close();
     heap_caps_free(image);           // PNG fully decoded (or failed) — buffer no longer needed
-    if (decoded != PNG_SUCCESS) { Serial.printf("[wxradar] PNG decode error %d\n", decoded); return false; }
+    if (decoded != PNG_SUCCESS) { FirmwareLog.printf("[wxradar] PNG decode error %d\n", decoded); return false; }
     if (s_decodedPixels == 0) {
-        Serial.println("[wxradar] decoded tile is empty (0 coloured pixels)");
+        FirmwareLog.println("[wxradar] decoded tile is empty (0 coloured pixels)");
     }
     wx_radar_commit(frameTime, lat, lon);
-    Serial.printf("[wxradar] frame %lu updated (%u bytes, source=%lu bbox=%d,%d-%d,%d crop=%lu)\n",
+    FirmwareLog.printf("[wxradar] frame %lu updated (%u bytes, source=%lu bbox=%d,%d-%d,%d crop=%lu)\n",
                   (unsigned long)frameTime, (unsigned)imageLen,
                   (unsigned long)s_sourcePixels, s_minX, s_minY, s_maxX, s_maxY,
                   (unsigned long)s_decodedPixels);

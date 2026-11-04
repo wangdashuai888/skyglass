@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // AXP2101 battery readout via XPowersLib. Shares the I2C bus with touch/IMU; only
 // read it from the LVGL loop (core 1), not the network task.
 #include "battery.h"
@@ -15,9 +16,9 @@ bool battery_begin() {
     if (s_ok) {
         PMU.enableBattDetection();
         PMU.enableBattVoltageMeasure();
-        Serial.println("[batt] AXP2101 ready");
+        FirmwareLog.println("[batt] AXP2101 ready");
     } else {
-        Serial.println("[batt] AXP2101 not found");
+        FirmwareLog.println("[batt] AXP2101 not found");
     }
     return s_ok;
 }
@@ -30,7 +31,7 @@ void battery_enable_codec_rail() {
     if (!s_ok) return;
     PMU.setALDO1Voltage(3300);   // ES8311 analog supply (the reference board enables this)
     PMU.enableALDO1();
-    Serial.println("[batt] ALDO1 (codec AVDD) enabled @3.3V");
+    FirmwareLog.println("[batt] ALDO1 (codec AVDD) enabled @3.3V");
 }
 
 // Use checked transactions: a failed status read must never be treated as USB removal.

@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // Board shims for the ESP32-P4-WIFI6-Touch-LCD-4C.
 //
 // main.cpp is shared across boards and calls two things this board does not have in the
@@ -34,7 +35,7 @@ static lv_color_t        *s_buf = nullptr;
 
 bool begin() {
     if (!display_p4_begin()) {
-        Serial.println("[p4] DSI bring-up failed");
+        FirmwareLog.println("[p4] DSI bring-up failed");
         return false;
     }
 
@@ -46,10 +47,10 @@ bool begin() {
     s_buf = (lv_color_t *)heap_caps_malloc(px * sizeof(lv_color_t),
                                            MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     if (!s_buf) {
-        Serial.println("[p4] internal draw buffer failed; falling back to PSRAM");
+        FirmwareLog.println("[p4] internal draw buffer failed; falling back to PSRAM");
         s_buf = (lv_color_t *)heap_caps_malloc(px * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
     }
-    if (!s_buf) { Serial.println("[p4] draw buffer alloc failed"); return false; }
+    if (!s_buf) { FirmwareLog.println("[p4] draw buffer alloc failed"); return false; }
     lv_disp_draw_buf_init(&s_dbuf, s_buf, nullptr, px);
 
     lv_disp_drv_init(&s_ddrv);
@@ -68,9 +69,9 @@ bool begin() {
         lv_indev_drv_register(&s_idrv);
     }
 
-    Serial.printf("[p4] PSRAM free: %u KB\n", (unsigned)(ESP.getFreePsram() / 1024));
+    FirmwareLog.printf("[p4] PSRAM free: %u KB\n", (unsigned)(ESP.getFreePsram() / 1024));
     ui_create();
-    Serial.println("[p4] LVGL ready");
+    FirmwareLog.println("[p4] LVGL ready");
     return true;
 }
 

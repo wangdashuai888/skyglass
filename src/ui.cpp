@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // M3 UI: tileview (radar / list / stats) + tap-to-inspect detail card.
 // Pure LVGL, portable. Taps hit-test via radar::hitTest; selection lives in radar.
 #include "ui.h"
@@ -1645,7 +1646,7 @@ static bool splash_decode(lv_color_t *dst) {
     TJpgDec.setCallback(splash_jpg_out);
     const JRESULT r = TJpgDec.drawJpg(0, 0, SPLASH_JPG, sizeof(SPLASH_JPG));
     s_splashDst = nullptr;
-    if (r != JDR_OK) Serial.printf("[splash] jpeg decode failed: %d\n", (int)r);
+    if (r != JDR_OK) FirmwareLog.printf("[splash] jpeg decode failed: %d\n", (int)r);
     return r == JDR_OK;
 }
 #endif

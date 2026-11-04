@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 #include "rtc_pcf85063.h"
 #include "config.h"
 #include <Arduino.h>
@@ -15,7 +16,7 @@ static inline uint8_t dec2bcd(uint8_t d) { return (uint8_t)(((d / 10) << 4) | (d
 bool rtc_begin() {
     Wire.beginTransmission(I2C_ADDR_RTC);
     s_ok = (Wire.endTransmission() == 0);
-    Serial.printf("[rtc] PCF85063 %s\n", s_ok ? "ready" : "not found");
+    FirmwareLog.printf("[rtc] PCF85063 %s\n", s_ok ? "ready" : "not found");
     return s_ok;
 }
 

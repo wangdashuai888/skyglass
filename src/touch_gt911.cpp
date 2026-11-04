@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // GT911 capacitive touch for the ESP32-P4-WIFI6-Touch-LCD-4C.
 //
 // The controller was reported as GT911 by a community ESPHome config for this exact
@@ -63,7 +64,7 @@ bool touch_gt911_begin(void) {
     for (int i = 0; i < 2; ++i) {
         s_addr = candidates[i];
         const bool ok = rd(GT911_REG_PRODUCT, id, 4);
-        Serial.printf("[gt911] probe 0x%02X: read=%d id=%02X %02X %02X %02X \"%c%c%c%c\"\n",
+        FirmwareLog.printf("[gt911] probe 0x%02X: read=%d id=%02X %02X %02X %02X \"%c%c%c%c\"\n",
                       s_addr, (int)ok, id[0], id[1], id[2], id[3],
                       isprint(id[0]) ? id[0] : '.', isprint(id[1]) ? id[1] : '.',
                       isprint(id[2]) ? id[2] : '.', isprint(id[3]) ? id[3] : '.');
@@ -72,7 +73,7 @@ bool touch_gt911_begin(void) {
         // and shares the status/coordinate registers used below. The vendor's gt911.h
         // belongs to the 3.4" variant; the 4" board carries a different controller.
         if (ok && id[0] == '9') {
-            Serial.printf("[touch] Goodix GT%c%c%c%c at 0x%02X\n",
+            FirmwareLog.printf("[touch] Goodix GT%c%c%c%c at 0x%02X\n",
                           id[0], id[1], id[2], id[3] ? id[3] : ' ', s_addr);
             return true;
         }
@@ -80,14 +81,14 @@ bool touch_gt911_begin(void) {
     s_addr = 0;
     // Not at either strap address. Scan the bus so the failure names what IS present
     // instead of leaving us guessing -- the codec answering proves the bus itself works.
-    Serial.println("[gt911] not at 0x5D or 0x14; scanning bus:");
+    FirmwareLog.println("[gt911] not at 0x5D or 0x14; scanning bus:");
     int found = 0;
     for (uint8_t a = 0x08; a < 0x78; ++a) {
         Wire.beginTransmission(a);
-        if (Wire.endTransmission() == 0) { Serial.printf("[i2c]   device at 0x%02X\n", a); ++found; }
+        if (Wire.endTransmission() == 0) { FirmwareLog.printf("[i2c]   device at 0x%02X\n", a); ++found; }
         delay(2);
     }
-    if (!found) Serial.println("[i2c]   nothing responded");
+    if (!found) FirmwareLog.println("[i2c]   nothing responded");
     return false;
 }
 

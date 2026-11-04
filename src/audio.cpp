@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // ES8311 codec "ping" generator. See audio.h for the core/bus discipline.
 //
 // Uses the IDF I2S driver directly (the Arduino ESP_I2S wrapper hit an IRAM-safe
@@ -255,7 +256,7 @@ static void play_cue(int cue) {
         // rather than keeping a stereo copy around.
         const int16_t *pcm = s_userPcm ? s_userPcm : ALERT_SAMPLE;
         const size_t   len = s_userPcm ? s_userLen : (size_t)ALERT_SAMPLE_LEN;
-        Serial.printf("[audio] cue=%d pack=custom(%s) sample=%u frames (%.2fs)\n",
+        FirmwareLog.printf("[audio] cue=%d pack=custom(%s) sample=%u frames (%.2fs)\n",
                       cue, s_userPcm ? "uploaded" : "built-in",
                       (unsigned)len, len / (double)ALERT_SAMPLE_RATE);
         const float gain = s_vol / 100.0f;
@@ -276,7 +277,7 @@ static void play_cue(int cue) {
         if (pk < 0 || pk >= AUDIO_PACK_COUNT) pk = AUDIO_PACK_CHIME;
         if (pk == AUDIO_PACK_CUSTOM) pk = AUDIO_PACK_WARN;   // no sample installed
         const auto &seq = PACKS[pk][ci];
-        Serial.printf("[audio] cue=%d pack=%d notes=%d first=%.0fHz decay=%.1f\n",
+        FirmwareLog.printf("[audio] cue=%d pack=%d notes=%d first=%.0fHz decay=%.1f\n",
                       cue, pk, (int)seq.count, (double)seq.n[0].f0, (double)seq.n[0].decay);
         for (int k = 0; k < seq.count; ++k) {
             const Note &nt = seq.n[k];
@@ -305,32 +306,32 @@ bool audio_begin() {
 
     const uint8_t id1 = es_read(0xFD), id2 = es_read(0xFE);   // expect 0x83, 0x11
     if (id1 != 0x83) {
-        Serial.printf("[audio] ES8311 not found (id=0x%02X 0x%02X)\n", id1, id2);
+        FirmwareLog.printf("[audio] ES8311 not found (id=0x%02X 0x%02X)\n", id1, id2);
         s_ok = false;
         return false;
     }
     es8311_init();
 
     const uint8_t dr[] = {0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x09,0x0A,0x0D,0x0E,0x12,0x14,0x31,0x32,0x37,0x44};
-    Serial.print("[audio] ES8311 regs:");
-    for (uint8_t r : dr) Serial.printf(" %02X=%02X", r, es_read(r));
-    Serial.println();
+    FirmwareLog.print("[audio] ES8311 regs:");
+    for (uint8_t r : dr) FirmwareLog.printf(" %02X=%02X", r, es_read(r));
+    FirmwareLog.println();
 
     if (!i2s_setup()) {
-        Serial.println("[audio] I2S init failed");
+        FirmwareLog.println("[audio] I2S init failed");
         s_ok = false;
         return false;
     }
     s_buf = (int16_t *)heap_caps_malloc(S_BUF_LEN * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     if (!s_buf) {
-        Serial.println("[audio] tone buffer alloc failed");
+        FirmwareLog.println("[audio] tone buffer alloc failed");
         s_ok = false;
         return false;
     }
     s_sem = xSemaphoreCreateBinary();
     xTaskCreatePinnedToCore(audio_task, "audio", 4096, nullptr, 1, nullptr, 0);  // I2S only -> core 0
     s_ok = true;
-    Serial.println("[audio] ES8311 ready");
+    FirmwareLog.println("[audio] ES8311 ready");
     return true;
 }
 
@@ -366,7 +367,7 @@ bool audio_load_sample() {
     f.close();
     if (got != bytes) { heap_caps_free(pcm); return false; }
     audio_adopt_sample(pcm, bytes / sizeof(int16_t));
-    Serial.printf("[audio] loaded uploaded sound: %u samples (%.2fs)\n",
+    FirmwareLog.printf("[audio] loaded uploaded sound: %u samples (%.2fs)\n",
                   (unsigned)s_userLen, s_userLen / (double)ALERT_SAMPLE_RATE);
     return true;
 }

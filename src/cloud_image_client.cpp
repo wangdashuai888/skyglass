@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 #include "cloud_image_client.h"
 #include "cloud_image.h"
 #include "config.h"
@@ -34,7 +35,7 @@ static bool get_jpeg(const char *url, uint8_t **out, size_t *outLen) {
     // Streamed straight into PSRAM (net_fetch): a satellite JPEG can be 100+ KB, and
     // buffering it in an internal-heap String starves the TLS handshake of the live feed.
     if (!net_fetch_psram(url, ADSB_USER_AGENT, out, outLen, 180000, 4500, 12000)) {
-        Serial.println("[clouds] download failed");
+        FirmwareLog.println("[clouds] download failed");
         return false;
     }
     if (*outLen < 100) { heap_caps_free(*out); *out = nullptr; *outLen = 0; return false; }
@@ -57,12 +58,12 @@ bool cloud_image_fetch(double lat, double lon) {
 
     uint8_t *image = nullptr; size_t imageLen = 0;
     if (!get_jpeg(url, &image, &imageLen)) {
-        Serial.println("[clouds] image fetch failed"); return false;
+        FirmwareLog.println("[clouds] image fetch failed"); return false;
     }
     uint16_t jw = 0, jh = 0;
     if (TJpgDec.getJpgSize(&jw, &jh, image, imageLen) != JDR_OK ||
         jw != WX_RADAR_SIZE || jh != WX_RADAR_SIZE) {
-        Serial.printf("[clouds] unexpected JPEG %ux%u\n", jw, jh);
+        FirmwareLog.printf("[clouds] unexpected JPEG %ux%u\n", jw, jh);
         heap_caps_free(image); return false;
     }
     s_dst = cloud_image_back_buffer();
@@ -73,10 +74,10 @@ bool cloud_image_fetch(double lat, double lon) {
     heap_caps_free(image);
     s_dst = nullptr;
     if (result != JDR_OK) {
-        Serial.printf("[clouds] JPEG decode error %d\n", result); return false;
+        FirmwareLog.printf("[clouds] JPEG decode error %d\n", result); return false;
     }
     const uint32_t frameTime = (uint32_t)time(nullptr);
     cloud_image_commit(frameTime, lat, lon);
-    Serial.printf("[clouds] satellite image updated (%u bytes)\n", (unsigned)imageLen);
+    FirmwareLog.printf("[clouds] satellite image updated (%u bytes)\n", (unsigned)imageLen);
     return true;
 }

@@ -306,3 +306,28 @@ numbers were chosen by eye and should be changed by eye.
 ## MakerWorld packaging
 - Parametric printable enclosure for the round board (bezel + stand), à la the original radar.
 - Publish firmware + STLs; include a looping GIF of the live sweep. The original radar earned MakerWorld "featured/boost" badges — same formula here for points toward the P2S.
+
+## GPS acquisition and diagnostic logging (v1.19.8)
+
+The LC76G is read every second, before and after a fix, with a fixed 4,096-byte
+I2C buffer allocated once at boot. This follows the field-tested workaround in
+https://github.com/socquique/capsule-radar/issues/24 and avoids the previous
+720-byte / two-second limit and one-minute pause after a fix. GPS location must
+still be enabled in Settings. The first valid position is considered immediately;
+subsequent radar-centre updates are considered once per minute, retaining the
+existing greater-than-1-km movement threshold.
+
+Settings links to `/log`, where diagnostic logging can be enabled or disabled.
+It defaults to off and the choice is saved. When enabled, `/log.txt` exposes GPS
+status and the most recent 16 KiB of firmware output, raw GPS NMEA messages, and
+ESP-IDF logs emitted at the configured build log level. Application logs include
+Wi-Fi, ADS-B, weather, display, storage, power and update diagnostics. Direct ROM
+boot/panic output and third-party direct serial output are not captured. The
+WiFiManager debug stream is disabled. No Wi-Fi passwords are added by this logger.
+
+The buffer is synchronized between cores, stays in RAM and is cleared on disable
+or restart. Disabled logging skips application log formatting and capture; enabling
+it adds processing and opening the page adds Wi-Fi traffic every two seconds.
+Battery impact has not been measured. Pause or close the page to stop polling, and
+disable logging when troubleshooting is complete. GPS I2C reads still block the
+UI loop while running; the logger does not change the receiver's power state.

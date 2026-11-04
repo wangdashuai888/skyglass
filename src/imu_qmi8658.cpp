@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // QMI8658 accelerometer over I2C (Arduino). Shares the bus with the touch (SDA/SCL
 // in config.h). We only need gravity on the Z axis to detect a face-down board.
 #include "imu_qmi8658.h"
@@ -43,12 +44,12 @@ bool imu_begin() {
             wr(QMI_CTRL1, 0x40);   // address auto-increment
             wr(QMI_CTRL2, 0x06);   // accel: ±2 g, ~125 Hz
             wr(QMI_CTRL7, 0x01);   // enable accelerometer
-            Serial.printf("[imu] QMI8658 ready at 0x%02X\n", s_addr);
+            FirmwareLog.printf("[imu] QMI8658 ready at 0x%02X\n", s_addr);
             s_ok = true;
             return true;
         }
     }
-    Serial.println("[imu] QMI8658 not found");
+    FirmwareLog.println("[imu] QMI8658 not found");
     s_ok = false;
     return false;
 }

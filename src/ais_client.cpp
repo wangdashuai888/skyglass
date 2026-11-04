@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // aisstream.io live AIS feed.
 //
 // One persistent WSS connection, subscribed to a bounding box around the scope. The
@@ -51,7 +52,7 @@ static void send_subscription(void) {
              s_key, s_lat - dLat, s_lon - dLon, s_lat + dLat, s_lon + dLon);
     s_ws.sendTXT(msg);
     s_needSub = false;
-    Serial.printf("[ais] subscribed to box +/-%.0f km\n", (double)s_rangeKm);
+    FirmwareLog.printf("[ais] subscribed to box +/-%.0f km\n", (double)s_rangeKm);
 }
 
 static void handle_message(const uint8_t *payload, size_t len) {
@@ -95,18 +96,18 @@ static void ws_event(WStype_t type, uint8_t *payload, size_t len) {
     switch (type) {
         case WStype_CONNECTED:
             s_connected = true;
-            Serial.println("[ais] connected");
+            FirmwareLog.println("[ais] connected");
             send_subscription();
             break;
         case WStype_DISCONNECTED:
-            if (s_connected) Serial.println("[ais] disconnected");
+            if (s_connected) FirmwareLog.println("[ais] disconnected");
             s_connected = false;
             break;
         case WStype_TEXT:
             handle_message(payload, len);
             break;
         case WStype_ERROR:
-            Serial.println("[ais] socket error");
+            FirmwareLog.println("[ais] socket error");
             break;
         default:
             break;
@@ -151,7 +152,7 @@ void ais_loop(void) {
         s_ws.onEvent(ws_event);
         s_ws.setReconnectInterval(15000);
         s_started = true;
-        Serial.println("[ais] connecting to aisstream.io");
+        FirmwareLog.println("[ais] connecting to aisstream.io");
     }
     s_ws.loop();
     if (s_needSub && s_connected) send_subscription();

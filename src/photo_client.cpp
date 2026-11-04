@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // Aircraft photo via planespotters.net (free, non-commercial, attribution).
 //   GET /pub/photos/hex/{icao}  -> JSON with a thumbnail URL + photographer
 //   download the JPEG -> decode (TJpgDec) into photo_buffer() as RGB565.
@@ -42,10 +43,10 @@ static bool http_get(const char *url, uint8_t **out, size_t *outLen, size_t maxL
     http.setReuse(false);
     http.setConnectTimeout(3000);    // keep short: this runs on the feed task, a slow photo
     http.setTimeout(6000);           // server must not freeze the live aircraft poll for long
-    if (!http.begin(cli, url)) { Serial.println("[photo]   http.begin failed"); cli.stop(); return false; }
+    if (!http.begin(cli, url)) { FirmwareLog.println("[photo]   http.begin failed"); cli.stop(); return false; }
     http.setUserAgent(PS_UA);   // planespotters rejects the default UA; set the canonical one
     const int code = http.GET();
-    if (code != 200) { Serial.printf("[photo]   HTTP %d\n", code); http.end(); cli.stop(); return false; }
+    if (code != 200) { FirmwareLog.printf("[photo]   HTTP %d\n", code); http.end(); cli.stop(); return false; }
 
     const int len = http.getSize();                  // >0 = Content-Length; -1 = chunked/unknown
     uint8_t *buf = nullptr;
@@ -114,7 +115,7 @@ bool photo_fetch(const char *hex) {
         char nb[56]; snprintf(nb,sizeof(nb),"skip: low mem, largest=%u",
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         photo_note(nb);
-        Serial.println("[photo] low memory, skipping");
+        FirmwareLog.println("[photo] low memory, skipping");
         photo_fail(hex, true);
         return false;
     }
@@ -134,7 +135,7 @@ bool photo_fetch(const char *hex) {
     char url[128];
     snprintf(url, sizeof(url), "https://api.planespotters.net/pub/photos/hex/%s", hex);
     uint8_t *jbuf = nullptr; size_t jlen = 0;
-    if (!http_get(url, &jbuf, &jlen, 8192)) { photo_note("planespotters request failed"); Serial.printf("[photo] %s: planespotters request failed\n", hex); photo_fail(hex, true); return false; }
+    if (!http_get(url, &jbuf, &jlen, 8192)) { photo_note("planespotters request failed"); FirmwareLog.printf("[photo] %s: planespotters request failed\n", hex); photo_fail(hex, true); return false; }
 
     JsonDocument filter(&s_jsonPsram);
     filter["photos"][0]["thumbnail_large"]["src"] = true;
@@ -142,14 +143,14 @@ bool photo_fetch(const char *hex) {
     JsonDocument doc(&s_jsonPsram);
     const DeserializationError err = deserializeJson(doc, jbuf, jlen, DeserializationOption::Filter(filter));
     heap_caps_free(jbuf);
-    if (err) { photo_note("planespotters json parse error"); Serial.printf("[photo] %s: json err %s\n", hex, err.c_str()); photo_fail(hex, true); return false; }
+    if (err) { photo_note("planespotters json parse error"); FirmwareLog.printf("[photo] %s: json err %s\n", hex, err.c_str()); photo_fail(hex, true); return false; }
 
     const char *imgUrl = doc["photos"][0]["thumbnail_large"]["src"] | "";
     char credit[40];
     snprintf(credit, sizeof(credit), "%s", (const char *)(doc["photos"][0]["photographer"] | ""));
     // The only definitive answer: planespotters replied and has nothing for this
     // airframe. Cache it so we stop asking; every other failure above is transient.
-    if (!imgUrl[0]) { photo_note("planespotters has none for this airframe"); Serial.printf("[photo] %s: no photo available\n", hex); photo_fail(hex, false); return false; }
+    if (!imgUrl[0]) { photo_note("planespotters has none for this airframe"); FirmwareLog.printf("[photo] %s: no photo available\n", hex); photo_fail(hex, false); return false; }
 
     // 2) download the JPEG thumbnail.
     // planespotters serves *progressive* JPEGs, which TJpgDec cannot decode. Route the
@@ -165,7 +166,7 @@ bool photo_fetch(const char *hex) {
              "https://images.weserv.nl/?url=%s&w=%d&h=%d&fit=inside&output=jpg", bare, canvasW, canvasH);
 
     uint8_t *img = nullptr; size_t ilen = 0;
-    if (!http_get(proxUrl, &img, &ilen, 65536)) { photo_note("weserv proxy download failed"); Serial.printf("[photo] %s: image download failed\n", hex); photo_fail(hex, true); return false; }
+    if (!http_get(proxUrl, &img, &ilen, 65536)) { photo_note("weserv proxy download failed"); FirmwareLog.printf("[photo] %s: image download failed\n", hex); photo_fail(hex, true); return false; }
 
     // Save before decoding: this is the only point the JPEG exists in one piece, and
     // next time it spares both network requests and the wait.
@@ -184,7 +185,7 @@ static bool decode_and_commit(const char *hex, uint8_t *img, size_t ilen,
     uint16_t jw = 0, jh = 0;
     if (TJpgDec.getJpgSize(&jw, &jh, img, ilen) != JDR_OK || jw == 0 || jh == 0) {
         photo_note("getJpgSize failed");
-        Serial.printf("[photo] %s: getJpgSize failed\n", hex);
+        FirmwareLog.printf("[photo] %s: getJpgSize failed\n", hex);
         heap_caps_free(img); photo_fail(hex, true); return false;
     }
     uint8_t scale = 1;
@@ -206,6 +207,6 @@ static bool decode_and_commit(const char *hex, uint8_t *img, size_t ilen,
     if (jr != JDR_OK) { photo_note("jpeg decode failed"); photo_fail(hex, true); return false; }
     photo_note(fromNetwork ? "ok" : "ok (cached)");
     photo_commit(s_dstW, s_dstH, hex, credit);
-    Serial.printf("[photo] %s: %dx%d (scale 1/%d) by %s\n", hex, s_dstW, s_dstH, scale, credit);
+    FirmwareLog.printf("[photo] %s: %dx%d (scale 1/%d) by %s\n", hex, s_dstW, s_dstH, scale, credit);
     return true;
 }

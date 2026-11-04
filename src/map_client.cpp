@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // Map-tile background: download CARTO basemap tiles, stitch them, then resample the
 // mosaic through the inverse of the radar's azimuthal-equidistant projection.
 //
@@ -66,7 +67,7 @@ static int       s_dstX = 0, s_dstY = 0;     // where the tile being decoded lan
 static bool ensure_decoder(void) {
     if (s_png) return true;
     void *mem = heap_caps_malloc(sizeof(PNG), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!mem) { Serial.println("[map] PSRAM decoder allocation failed"); return false; }
+    if (!mem) { FirmwareLog.println("[map] PSRAM decoder allocation failed"); return false; }
     s_png = new (mem) PNG();
     return true;
 }
@@ -160,7 +161,7 @@ void map_client_request(double lat, double lon, float rangeKm) {
     int z = pick_zoom(lat, rangeKm);
     int tx0 = 0, ty0 = 0, nx = 0, ny = 0;
     while (z >= MAP_ZOOM_MIN && !tile_bounds(lat, lon, rangeKm, z, &tx0, &ty0, &nx, &ny)) --z;
-    if (z < MAP_ZOOM_MIN) { Serial.println("[map] no usable zoom for this range"); return; }
+    if (z < MAP_ZOOM_MIN) { FirmwareLog.println("[map] no usable zoom for this range"); return; }
 
     free_mosaic();
     s_mosaicW = nx * MAP_TILE_PX;
@@ -168,7 +169,7 @@ void map_client_request(double lat, double lon, float rangeKm) {
     s_mosaic = (uint16_t *)heap_caps_malloc((size_t)s_mosaicW * s_mosaicH * sizeof(uint16_t),
                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s_mosaic) {
-        Serial.println("[map] mosaic allocation failed");
+        FirmwareLog.println("[map] mosaic allocation failed");
         s_mosaicW = s_mosaicH = 0;
         return;
     }
@@ -179,7 +180,7 @@ void map_client_request(double lat, double lon, float rangeKm) {
     s_tileIdx = 0;
     s_failed = 0;
     s_state = MAP_FETCH;
-    Serial.printf("[map] build z=%d %dx%d tiles for %.0f km\n", z, nx, ny, (double)rangeKm);
+    FirmwareLog.printf("[map] build z=%d %dx%d tiles for %.0f km\n", z, nx, ny, (double)rangeKm);
 }
 
 // --- tile decode ---------------------------------------------------------------
@@ -247,7 +248,7 @@ static bool fetch_one_tile(int idx) {
 
     uint8_t *png = nullptr; size_t len = 0;
     if (!net_fetch_psram(url, MAP_UA, &png, &len, 131072, 3500, 8000)) {
-        Serial.printf("[map] tile %d/%d fetch failed\n", idx + 1, s_nx * s_ny);
+        FirmwareLog.printf("[map] tile %d/%d fetch failed\n", idx + 1, s_nx * s_ny);
         return false;
     }
     if (!ensure_decoder()) { heap_caps_free(png); return false; }
@@ -260,7 +261,7 @@ static bool fetch_one_tile(int idx) {
         s_png->close();
     }
     heap_caps_free(png);
-    if (!ok) Serial.printf("[map] tile %d decode failed\n", idx + 1);
+    if (!ok) FirmwareLog.printf("[map] tile %d decode failed\n", idx + 1);
     return ok;
 }
 
@@ -341,7 +342,7 @@ bool map_client_step(void) {
 
     // MAP_COMPOSE
     if (s_failed >= s_nx * s_ny) {                        // nothing downloaded at all
-        Serial.println("[map] all tiles failed; keeping the previous background");
+        FirmwareLog.println("[map] all tiles failed; keeping the previous background");
         s_state = MAP_IDLE;
         free_mosaic();
         return false;
@@ -357,6 +358,6 @@ bool map_client_step(void) {
     s_haveLat = s_lat; s_haveLon = s_lon; s_haveRange = s_rangeKm;
     s_state = MAP_IDLE;
     free_mosaic();                                        // the composed image is all we keep
-    Serial.printf("[map] background ready (z=%d, %d tile(s) missing)\n", s_zoom, s_failed);
+    FirmwareLog.printf("[map] background ready (z=%d, %d tile(s) missing)\n", s_zoom, s_failed);
     return false;
 }

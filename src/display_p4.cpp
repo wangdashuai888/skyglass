@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // MIPI-DSI panel bring-up for the Waveshare ESP32-P4-WIFI6-Touch-LCD-4C.
 //
 // Drives the panel through ESP-IDF's esp_lcd_mipi_dsi, which Arduino-ESP32 3.x exposes.
@@ -52,7 +53,7 @@ bool display_p4_begin(void) {
     ldo_cfg.chan_id    = DSI_LDO_CHANNEL;
     ldo_cfg.voltage_mv = DSI_LDO_MV;
     if (esp_ldo_acquire_channel(&ldo_cfg, &s_ldo) != ESP_OK) {
-        Serial.println("[p4lcd] DSI PHY LDO acquire failed");
+        FirmwareLog.println("[p4lcd] DSI PHY LDO acquire failed");
         return false;
     }
 
@@ -63,7 +64,7 @@ bool display_p4_begin(void) {
     bus_cfg.phy_clk_src        = MIPI_DSI_PHY_CLK_SRC_DEFAULT;
     bus_cfg.lane_bit_rate_mbps = (uint32_t)(DSI_LANE_BITRATE_HZ / 1000000UL);
     if (esp_lcd_new_dsi_bus(&bus_cfg, &s_bus) != ESP_OK) {
-        Serial.println("[p4lcd] dsi bus create failed");
+        FirmwareLog.println("[p4lcd] dsi bus create failed");
         return false;
     }
 
@@ -73,7 +74,7 @@ bool display_p4_begin(void) {
     dbi_cfg.lcd_cmd_bits    = 8;
     dbi_cfg.lcd_param_bits  = 8;
     if (esp_lcd_new_panel_io_dbi(s_bus, &dbi_cfg, &s_io) != ESP_OK) {
-        Serial.println("[p4lcd] dbi io create failed");
+        FirmwareLog.println("[p4lcd] dbi io create failed");
         return false;
     }
 
@@ -98,7 +99,7 @@ bool display_p4_begin(void) {
     dpi_cfg.video_timing.vsync_back_porch  = DSI_VSYNC_BACK;
     dpi_cfg.flags.use_dma2d = true;    // the P4's 2D accelerator does the blit
     if (esp_lcd_new_panel_dpi(s_bus, &dpi_cfg, &s_panel) != ESP_OK) {
-        Serial.println("[p4lcd] dpi panel create failed");
+        FirmwareLog.println("[p4lcd] dpi panel create failed");
         return false;
     }
     // Init registers go out AFTER the DPI panel exists. Sending them first -- the
@@ -112,22 +113,22 @@ bool display_p4_begin(void) {
         const uint8_t v = kPanelInit[i].val;
         const esp_err_t e = esp_lcd_panel_io_tx_param(s_io, kPanelInit[i].reg, &v, 1);
         if (e != ESP_OK) {
-            if (txFail < 3) Serial.printf("[p4lcd] init[%u] reg 0x%02X failed: %s\n",
+            if (txFail < 3) FirmwareLog.printf("[p4lcd] init[%u] reg 0x%02X failed: %s\n",
                                           (unsigned)i, kPanelInit[i].reg, esp_err_to_name(e));
             ++txFail;
         }
         if (kPanelInit[i].delay_ms) delay(kPanelInit[i].delay_ms);
     }
-    Serial.printf("[p4lcd] init sequence: %u commands, %d failed\n",
+    FirmwareLog.printf("[p4lcd] init sequence: %u commands, %d failed\n",
                   (unsigned)(sizeof(kPanelInit) / sizeof(kPanelInit[0])), txFail);
 
     if (esp_lcd_panel_init(s_panel) != ESP_OK) {
-        Serial.println("[p4lcd] panel init failed");
+        FirmwareLog.println("[p4lcd] panel init failed");
         return false;
     }
 
     display_p4_backlight(true);
-    Serial.printf("[p4lcd] DSI up: %dx%d, %u lanes, %u Mbps\n",
+    FirmwareLog.printf("[p4lcd] DSI up: %dx%d, %u lanes, %u Mbps\n",
                   SCREEN_W, SCREEN_H, (unsigned)DSI_LANES, (unsigned)bus_cfg.lane_bit_rate_mbps);
     return true;
 }

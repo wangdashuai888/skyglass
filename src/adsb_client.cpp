@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // Fetch nearby aircraft from local receivers or airplanes.live / adsb.fi / adsb.lol and parse the
 // readsb JSON into a vector<Aircraft>.
 //
@@ -145,7 +146,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, bool lo
     http.useHTTP10(true);
     http.setConnectTimeout(local ? 2500 : 6000);    // fail reasonably fast: a slow host must not block the
     http.setTimeout(local ? 4000 : 8000);           // task (and the user's route/photo lookups) for too long
-    if (!http.begin(local ? (WiFiClient&)plain : (WiFiClient&)client, url)) { Serial.printf("[adsb] begin failed (%s)\n", host); return false; }
+    if (!http.begin(local ? (WiFiClient&)plain : (WiFiClient&)client, url)) { FirmwareLog.printf("[adsb] begin failed (%s)\n", host); return false; }
     // MUST be setUserAgent(): addHeader() silently drops User-Agent (it is on
     // HTTPClient's "handled by code" list), leaving the default "ESP32HTTPClient".
     http.setUserAgent(ADSB_USER_AGENT);
@@ -179,24 +180,24 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, bool lo
             }
             body[n] = '\0';
         }
-        Serial.printf("[adsb] HTTP %d (%s) tls=%d '%s' heap=%u largest=%u psram=%u\n",
+        FirmwareLog.printf("[adsb] HTTP %d (%s) tls=%d '%s' heap=%u largest=%u psram=%u\n",
                       code, host, tlsCode, tls,
                       (unsigned)ESP.getFreeHeap(),
                       (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                       (unsigned)ESP.getFreePsram());
-        if (body[0]) Serial.printf("[adsb]   body: %s\n", body);
+        if (body[0]) FirmwareLog.printf("[adsb]   body: %s\n", body);
 
         if (!local && code == 403) {
             // Policy refusal: park it. Announce once, not on every poll.
             if (_pacer.onRefused(slot, millis()))
-                Serial.printf("[adsb] %s parked for %us after HTTP 403\n",
+                FirmwareLog.printf("[adsb] %s parked for %us after HTTP 403\n",
                               host, (unsigned)(ADSB_COOLDOWN_403_MS / 1000));
         } else if (!local && code == 429) {
             // Back off multiplicatively; the limit is dynamic, so probe for what sticks.
             const long ra = http.header("Retry-After").toInt();
             const uint32_t sp = _pacer.onRateLimited(slot, millis(), ra);
             if (sp)
-                Serial.printf("[adsb] %s rate-limited; spacing requests %us apart\n",
+                FirmwareLog.printf("[adsb] %s rate-limited; spacing requests %us apart\n",
                               host, (unsigned)(sp / 1000));
         } else if (!local && code <= 0) {
             // No answer at all (connect refused, TLS, read timeout). Until this branch
@@ -209,11 +210,11 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, bool lo
             if (sp) {
                 const uint32_t gap = _pacer.gapMs(slot, millis());
                 if (gap < sp)
-                    Serial.printf("[adsb] %s silent (HTTP %d); spacing requests %us apart "
+                    FirmwareLog.printf("[adsb] %s silent (HTTP %d); spacing requests %us apart "
                                   "while every provider is silent, %us once one answers\n",
                                   host, code, (unsigned)(gap / 1000), (unsigned)(sp / 1000));
                 else
-                    Serial.printf("[adsb] %s silent (HTTP %d); spacing requests %us apart\n",
+                    FirmwareLog.printf("[adsb] %s silent (HTTP %d); spacing requests %us apart\n",
                                   host, code, (unsigned)(gap / 1000));
             }
         }
@@ -241,7 +242,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, bool lo
     DeserializationError err = deserializeJson(doc, jsonStream,
                                                DeserializationOption::Filter(filter));
     if (err) {
-        Serial.printf("[adsb] JSON parse failed (%s): %s; expected=%d read=%u available=%d connected=%d\n",
+        FirmwareLog.printf("[adsb] JSON parse failed (%s): %s; expected=%d read=%u available=%d connected=%d\n",
                       host, err.c_str(), expectedBytes, (unsigned)jsonStream.bytesRead(),
                       responseStream.available(), responseStream.connected());
         http.end();
@@ -256,11 +257,11 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, bool lo
         // indistinguishable from one that is never tried at all. It is also not a success:
         // pace it like a 429, or a provider that changes its payload shape gets re-asked
         // every poll forever — exactly the loop the chunked-response bug produced.
-        Serial.printf("[adsb] %s: 200 but no aircraft array (expected=%d read=%u)\n",
+        FirmwareLog.printf("[adsb] %s: 200 but no aircraft array (expected=%d read=%u)\n",
                       host, expectedBytes, (unsigned)jsonStream.bytesRead());
         const uint32_t sp = local ? 0 : _pacer.onUnusable(slot);
         if (sp)
-            Serial.printf("[adsb] %s unusable; spacing requests %us apart\n",
+            FirmwareLog.printf("[adsb] %s unusable; spacing requests %us apart\n",
                           host, (unsigned)(sp / 1000));
         return false;
     }
@@ -269,7 +270,7 @@ bool AdsbClient::fetchFrom(const char* host, std::vector<Aircraft>& out, bool lo
     // for pacing purposes.
     _lastHost = host;                   // so the caller can say who served the data
     if (!local && _pacer.onOk(slot))
-        Serial.printf("[adsb] %s steady; spacing eased to %us\n",
+        FirmwareLog.printf("[adsb] %s steady; spacing eased to %us\n",
                       host, (unsigned)(_pacer.spacingMs(slot) / 1000));
 
     // Keep the ADSB_MAX_AIRCRAFT *nearest* aircraft

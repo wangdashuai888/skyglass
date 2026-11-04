@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 #include "sd_store.h"
 #include "config.h"
 #include <string.h>
@@ -192,7 +193,7 @@ static void idx_build(void) {
     // airframes and roughly 200 million operations at the twenty thousand this is sized
     // for -- long enough to trip the task watchdog while mounting the card.
     qsort(s_idx, s_idxLen, sizeof(IdxEnt), idx_cmp);
-    Serial.printf("[sd] flight log: %u airframes on file\n", (unsigned)s_idxLen);
+    FirmwareLog.printf("[sd] flight log: %u airframes on file\n", (unsigned)s_idxLen);
 }
 
 // Mounting slot 0 by hand, because esp_vfs_fat_sdmmc_mount() cannot be used here.
@@ -296,7 +297,7 @@ bool sd_begin(void) {
         if (pv.getBool("sdcrash", false)) {
             pv.end();
             snprintf(s_status, sizeof(s_status), "disabled (crashed while probing)");
-            Serial.println("[sd] skipped: the last probe did not survive. /sdretry to try again.");
+            FirmwareLog.println("[sd] skipped: the last probe did not survive. /sdretry to try again.");
             return false;
         }
         pv.putBool("sdcrash", true);
@@ -324,7 +325,7 @@ bool sd_begin(void) {
         snprintf(s_status, sizeof(s_status), "%u-bit %dMHz %llu MB",
                  (unsigned)s_width, s_freqKhz / 1000,
                  (unsigned long long)(s_size / (1024ULL * 1024ULL)));
-        Serial.printf("[sd] mounted, %s\n", s_status);
+        FirmwareLog.printf("[sd] mounted, %s\n", s_status);
         if (!s_lock) s_lock = xSemaphoreCreateMutex();
         mkdir(SD_DIR, 0777);
         idx_build();
@@ -334,7 +335,7 @@ bool sd_begin(void) {
                      esp_err_to_name(s_lastErr), s_fsErr, s_probeName, (unsigned)s_probeMB);
         else
             snprintf(s_status, sizeof(s_status), "not mounted: %s", esp_err_to_name(s_lastErr));
-        Serial.printf("[sd] not mounted: %s\n", esp_err_to_name(s_lastErr));
+        FirmwareLog.printf("[sd] not mounted: %s\n", esp_err_to_name(s_lastErr));
     }
     {   // got here at all: whatever happened, it was not a reset
         Preferences pv;
@@ -368,8 +369,8 @@ bool sd_format(void) {
     // write in halfway through. Missing this lock is what made pressing Format crash the
     // board and reboot it without formatting anything.
     SdLock lk(20000);
-    if (!lk.held) { Serial.println("[sd] format: card busy"); return false; }
-    Serial.println("[sd] formatting card");
+    if (!lk.held) { FirmwareLog.println("[sd] format: card busy"); return false; }
+    FirmwareLog.println("[sd] formatting card");
 
     if (!s_mounted) {
         // A card this device cannot read is exactly when a format is wanted, so mount
@@ -378,25 +379,25 @@ bool sd_format(void) {
             if (mount_once(oneBit != 0, SDMMC_FREQ_HIGHSPEED, true)) {
                 s_mounted = true; s_width = oneBit ? 1 : 4; s_freqKhz = SDMMC_FREQ_HIGHSPEED;
             }
-        if (!s_mounted) { Serial.println("[sd] format FAILED (no usable card)"); return false; }
+        if (!s_mounted) { FirmwareLog.println("[sd] format FAILED (no usable card)"); return false; }
         s_size = s_card ? (uint64_t)s_card->csd.capacity * s_card->csd.sector_size : 0;
         snprintf(s_status, sizeof(s_status), "%u-bit %dMHz %llu MB", (unsigned)s_width,
                  s_freqKhz / 1000, (unsigned long long)(s_size / (1024ULL * 1024ULL)));
         mkdir(SD_DIR, 0777);
         s_idxLen = 0; s_fileRecs = 0;
-        Serial.println("[sd] format ok (via mount)");
+        FirmwareLog.println("[sd] format ok (via mount)");
         return true;
     }
 
     // Format the way we mounted -- by hand. esp_vfs_fat_sdcard_format() keeps its own
     // record of a mount made by esp_vfs_fat_sdmmc_mount(), which is not how this volume
     // was brought up (see mount_once), so it unwinds bookkeeping that does not exist.
-    if (s_pdrv == 0xFF) { Serial.println("[sd] format FAILED (no drive)"); return false; }
+    if (s_pdrv == 0xFF) { FirmwareLog.println("[sd] format FAILED (no drive)"); return false; }
     char drv[3] = { (char)('0' + s_pdrv), ':', 0 };
 
     void *work = heap_caps_malloc(FF_MAX_SS, MALLOC_CAP_SPIRAM);
     if (!work) work = malloc(FF_MAX_SS);
-    if (!work) { Serial.println("[sd] format FAILED (no memory for the work buffer)"); return false; }
+    if (!work) { FirmwareLog.println("[sd] format FAILED (no memory for the work buffer)"); return false; }
 
     f_mount(NULL, drv, 0);                       // drop the volume first
     MKFS_PARM opt = {};
@@ -409,7 +410,7 @@ bool sd_format(void) {
     s_idxLen = 0;
     s_fileRecs = 0;
     if (ok) { mkdir(SD_DIR, 0777); idx_build(); }
-    Serial.printf("[sd] format %s (f_mkfs=%d)\n", ok ? "ok" : "FAILED", (int)fr);
+    FirmwareLog.printf("[sd] format %s (f_mkfs=%d)\n", ok ? "ok" : "FAILED", (int)fr);
     return ok;
 }
 

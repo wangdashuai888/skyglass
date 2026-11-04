@@ -1,3 +1,4 @@
+#include "firmware_log.h"
 // M0 bring-up: CO5300 466x466 AMOLED via Arduino_GFX (QSPI) + LVGL.
 // Pins come from config.h (confirmed against the Waveshare board definition and a
 // working Arduino_GFX port for this exact panel). The panel runs off the always-on
@@ -262,19 +263,19 @@ namespace display {
 void setTouchFilter(bool (*filter)(bool)) { s_touchFilter = filter; }
 
 bool begin() {
-    Serial.println("[display] init CO5300 QSPI...");
+    FirmwareLog.println("[display] init CO5300 QSPI...");
     s_bus = new Arduino_ESP32QSPI(PIN_LCD_CS, PIN_LCD_SCLK,
                                   PIN_LCD_D0, PIN_LCD_D1, PIN_LCD_D2, PIN_LCD_D3);
     s_gfx = new Arduino_CO5300(s_bus, PIN_LCD_RST, 0 /*rotation*/,
                                SCREEN_W, SCREEN_H,
                                LCD_COL_OFFSET, LCD_ROW_OFFSET, 0, 0);
     if (!s_gfx->begin(LCD_QSPI_HZ)) {
-        Serial.println("[display] gfx->begin() FAILED");
+        FirmwareLog.println("[display] gfx->begin() FAILED");
         return false;
     }
     s_gfx->fillScreen(RGB565_BLACK);
     s_gfx->setBrightness(BRIGHTNESS_DEFAULT);
-    Serial.println("[display] panel up; init LVGL...");
+    FirmwareLog.println("[display] panel up; init LVGL...");
 
     lv_init();
 
@@ -287,7 +288,7 @@ bool begin() {
     s_buf1 = (lv_color_t *)heap_caps_malloc(buf_px * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
     s_buf2 = nullptr;
     if (!s_buf1) {
-        Serial.println("[display] PSRAM draw buffer failed; falling back to internal RAM");
+        FirmwareLog.println("[display] PSRAM draw buffer failed; falling back to internal RAM");
         s_buf1 = (lv_color_t *)heap_caps_malloc(buf_px * sizeof(lv_color_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     }
     lv_disp_draw_buf_init(&s_draw_buf, s_buf1, s_buf2, buf_px);
@@ -303,7 +304,7 @@ bool begin() {
     s_frameBuf = (lv_color_t *)heap_caps_calloc((size_t)SCREEN_W * SCREEN_H,
                                                 sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
     if (!s_rotBuf || !s_frameBuf) {
-        Serial.println("[display] WARNING: rotation buffer allocation failed; arbitrary angles unavailable");
+        FirmwareLog.println("[display] WARNING: rotation buffer allocation failed; arbitrary angles unavailable");
     }
 
     lv_disp_drv_init(&s_disp_drv);
@@ -320,12 +321,12 @@ bool begin() {
         s_indev_drv.type = LV_INDEV_TYPE_POINTER;
         s_indev_drv.read_cb = touch_read_cb;
         lv_indev_drv_register(&s_indev_drv);
-        Serial.println("[display] CST9217 touch registered");
+        FirmwareLog.println("[display] CST9217 touch registered");
     }
 
-    Serial.printf("[display] PSRAM free: %u KB\n", (unsigned)(ESP.getFreePsram() / 1024));
+    FirmwareLog.printf("[display] PSRAM free: %u KB\n", (unsigned)(ESP.getFreePsram() / 1024));
     ui_create();                   // M3: radar/list/stats views + tap-to-inspect
-    Serial.println("[display] LVGL ready");
+    FirmwareLog.println("[display] LVGL ready");
     return true;
 }
 
@@ -336,12 +337,12 @@ void setBrightness(uint8_t v) { if (s_gfx) s_gfx->setBrightness(v); }
 void setRotation(uint16_t degrees) {
     uint16_t normalized = (uint16_t)(degrees % 360);
     if ((normalized == 90 || normalized == 270) && !s_rotBuf) {
-        Serial.println("[display] quarter-turn rotation unavailable without the PSRAM scratch buffer");
+        FirmwareLog.println("[display] quarter-turn rotation unavailable without the PSRAM scratch buffer");
         normalized = 0;
     }
     if (normalized != 0 && normalized != 90 && normalized != 180 && normalized != 270
         && (!s_frameBuf || !s_rotBuf)) {
-        Serial.println("[display] arbitrary rotation unavailable without both PSRAM buffers");
+        FirmwareLog.println("[display] arbitrary rotation unavailable without both PSRAM buffers");
         normalized = 0;
     }
     if (normalized == s_rot) return;
