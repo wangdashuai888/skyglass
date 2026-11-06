@@ -329,5 +329,31 @@ The buffer is synchronized between cores, stays in RAM and is cleared on disable
 or restart. Disabled logging skips application log formatting and capture; enabling
 it adds processing and opening the page adds Wi-Fi traffic every two seconds.
 Battery impact has not been measured. Pause or close the page to stop polling, and
-disable logging when troubleshooting is complete. GPS I2C reads still block the
-UI loop while running; the logger does not change the receiver's power state.
+disable logging when troubleshooting is complete. The logger does not change the receiver's power state. See v1.19.9 below for
+background GPS processing.
+
+## Background GPS and automatic retries (v1.19.9)
+
+GPS reads and retries run in a dedicated core-0 task, started after peripheral
+initialization. A detected GPS is drained from startup even when GPS location is
+not selected, preventing the unread-output buildup while that setting is off.
+The display and WebUI consume a synchronized position/status snapshot instead of
+waiting for the receiver. One-second reads, 4,096-byte normal reads, and once-per-minute
+radar location checks after the first fix are retained.
+
+After 15 seconds without checksum-valid NMEA, recovery tries slower 50 kHz I2C,
+longer settling and smaller reads. Attempts are rate-limited to once per 15 seconds;
+valid NMEA restores normal reads. A missing position fix alone does not trigger
+recovery. This retries communication; it does not power-cycle the GPS receiver.
+
+The GPS protocol exchange exclusively holds a shared I2C mutex. Normal UI bus
+clients defer immediately, preserving cached battery and touch state while rendering
+continues. Touch updates can still be delayed during a GPS exchange. Explicit
+power-off may wait briefly for bus ownership. The log page reports worker status,
+recovery attempts and detailed length-query errors. Logging remains off by default,
+and any saved logging preference is respected.
+
+Validation: S3 firmware build; host tests for retry timing, timer wraparound,
+valid no-fix traffic, cross-thread bus exclusion, nonblocking UI access and nested
+shutdown register access. The background test firmware was confirmed working on
+hardware by the device owner before release.

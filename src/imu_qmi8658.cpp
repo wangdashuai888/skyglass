@@ -1,3 +1,4 @@
+#include "shared_i2c.h"
 #include "firmware_log.h"
 // QMI8658 accelerometer over I2C (Arduino). Shares the bus with the touch (SDA/SCL
 // in config.h). We only need gravity on the Z axis to detect a face-down board.
@@ -19,6 +20,8 @@ static uint8_t s_addr = 0x6B;
 static bool    s_ok   = false;
 
 static bool wr(uint8_t reg, uint8_t val) {
+    SharedI2cGuard bus;
+    if (!bus) return false;
     Wire.beginTransmission(s_addr);
     Wire.write(reg);
     Wire.write(val);
@@ -26,6 +29,8 @@ static bool wr(uint8_t reg, uint8_t val) {
 }
 
 static bool rd(uint8_t reg, uint8_t *buf, uint8_t len) {
+    SharedI2cGuard bus;
+    if (!bus) return false;
     Wire.beginTransmission(s_addr);
     Wire.write(reg);
     if (Wire.endTransmission(false) != 0) return false;   // repeated start

@@ -1,3 +1,4 @@
+#include "shared_i2c.h"
 #include "firmware_log.h"
 // GT911 capacitive touch for the ESP32-P4-WIFI6-Touch-LCD-4C.
 //

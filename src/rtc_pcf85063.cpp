@@ -1,3 +1,4 @@
+#include "shared_i2c.h"
 #include "firmware_log.h"
 #include "rtc_pcf85063.h"
 #include "config.h"
@@ -14,6 +15,8 @@ static inline uint8_t bcd2dec(uint8_t b) { return (uint8_t)((b >> 4) * 10 + (b &
 static inline uint8_t dec2bcd(uint8_t d) { return (uint8_t)(((d / 10) << 4) | (d % 10)); }
 
 bool rtc_begin() {
+    SharedI2cGuard bus;
+    if (!bus) return false;
     Wire.beginTransmission(I2C_ADDR_RTC);
     s_ok = (Wire.endTransmission() == 0);
     FirmwareLog.printf("[rtc] PCF85063 %s\n", s_ok ? "ready" : "not found");
@@ -23,6 +26,8 @@ bool rtc_begin() {
 bool rtc_present() { return s_ok; }
 
 bool rtc_read(struct tm *out) {
+    SharedI2cGuard bus;
+    if (!bus) return false;
     if (!s_ok || !out) return false;
     Wire.beginTransmission(I2C_ADDR_RTC);
     Wire.write(REG_SECONDS);
@@ -47,6 +52,8 @@ bool rtc_read(struct tm *out) {
 }
 
 bool rtc_write(const struct tm *t) {
+    SharedI2cGuard bus;
+    if (!bus) return false;
     if (!s_ok || !t) return false;
     Wire.beginTransmission(I2C_ADDR_RTC);
     Wire.write(REG_SECONDS);

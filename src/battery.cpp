@@ -1,3 +1,4 @@
+#include "shared_i2c.h"
 #include "firmware_log.h"
 // AXP2101 battery readout via XPowersLib. Shares the I2C bus with touch/IMU; only
 // read it from the LVGL loop (core 1), not the network task.
@@ -23,9 +24,24 @@ bool battery_begin() {
     return s_ok;
 }
 
-bool battery_present()  { return s_ok && PMU.isBatteryConnect(); }
-int  battery_percent()  { return s_ok ? PMU.getBatteryPercent() : -1; }
-bool battery_charging() { return s_ok && PMU.isCharging(); }
+bool battery_present() {
+    static bool cached = false;
+    SharedI2cGuard bus;
+    if (bus) cached = s_ok && PMU.isBatteryConnect();
+    return cached;
+}
+int battery_percent() {
+    static int cached = -1;
+    SharedI2cGuard bus;
+    if (bus) cached = s_ok ? PMU.getBatteryPercent() : -1;
+    return cached;
+}
+bool battery_charging() {
+    static bool cached = false;
+    SharedI2cGuard bus;
+    if (bus) cached = s_ok && PMU.isCharging();
+    return cached;
+}
 
 void battery_enable_codec_rail() {
     if (!s_ok) return;
@@ -36,6 +52,8 @@ void battery_enable_codec_rail() {
 
 // Use checked transactions: a failed status read must never be treated as USB removal.
 static bool pmic_read(uint8_t reg, uint8_t &value) {
+    SharedI2cGuard bus;
+    if (!bus) return false;
     Wire.beginTransmission(AXP2101_SLAVE_ADDRESS);
     Wire.write(reg);
     if (Wire.endTransmission(false) != 0) return false;
@@ -44,6 +62,8 @@ static bool pmic_read(uint8_t reg, uint8_t &value) {
     return true;
 }
 static bool pmic_write(uint8_t reg, uint8_t value) {
+    SharedI2cGuard bus;
+    if (!bus) return false;
     Wire.beginTransmission(AXP2101_SLAVE_ADDRESS);
     Wire.write(reg); Wire.write(value);
     return Wire.endTransmission() == 0;
@@ -55,6 +75,8 @@ bool battery_usb_present(bool &present) {
     return true;
 }
 bool battery_shutdown() {
+    SharedI2cGuard bus(pdMS_TO_TICKS(3000)); // deliberate power-off may wait, normal UI reads never do
+    if (!bus) return false;
     bool usb;
     if (!battery_usb_present(usb) || usb) return false;
     uint8_t batfet, common, verified;

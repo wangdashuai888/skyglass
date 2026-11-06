@@ -1,3 +1,4 @@
+#include "shared_i2c.h"
 #include "firmware_log.h"
 // ES8311 codec "ping" generator. See audio.h for the core/bus discipline.
 //
@@ -34,12 +35,14 @@ static size_t        s_userLen = 0;
 static SemaphoreHandle_t s_sem = nullptr;
 
 static void es_write(uint8_t reg, uint8_t val) {
+    SharedI2cGuard bus(portMAX_DELAY);
     Wire.beginTransmission(ES8311_ADDR);
     Wire.write(reg);
     Wire.write(val);
     Wire.endTransmission();
 }
 static uint8_t es_read(uint8_t reg) {
+    SharedI2cGuard bus(portMAX_DELAY);
     Wire.beginTransmission(ES8311_ADDR);
     Wire.write(reg);
     if (Wire.endTransmission(false) != 0) return 0;
@@ -48,6 +51,7 @@ static uint8_t es_read(uint8_t reg) {
 }
 
 static void es_update(uint8_t reg, uint8_t andmask, uint8_t ormask) {
+    SharedI2cGuard bus(portMAX_DELAY);
     es_write(reg, (uint8_t)((es_read(reg) & andmask) | ormask));
 }
 

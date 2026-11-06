@@ -1,3 +1,4 @@
+#include "shared_i2c.h"
 #include "firmware_log.h"
 // CST9217 capacitive touch over I2C (Arduino). Ported from Waveshare's
 // esp_lcd_touch_cst9217: read 10 bytes from reg 0xD000, validate ACK 0xAB,
@@ -14,6 +15,8 @@
 
 // Read `len` bytes from a 16-bit register (address sent big-endian, then STOP).
 static bool cst_read_reg(uint16_t reg, uint8_t *data, uint8_t len) {
+    SharedI2cGuard bus;
+    if (!bus) return false;
     Wire.beginTransmission((uint8_t)I2C_ADDR_TOUCH);
     Wire.write((uint8_t)(reg >> 8));
     Wire.write((uint8_t)(reg & 0xFF));
@@ -74,6 +77,14 @@ bool touch_read(uint16_t *ox, uint16_t *oy) {
 // esp_lcd_touch_cst9217 report: point 0 in bytes 0..4, count in 5, ACK in 6, then
 // each further point in the next 5 bytes (point 1 = bytes 7..11).
 int touch_read_points(uint16_t x[2], uint16_t y[2]) {
+    static int lastCount = 0;
+    static uint16_t lastX[2] = {}, lastY[2] = {};
+    SharedI2cGuard bus;
+    if (!bus) {
+        for (int i = 0; i < lastCount; ++i) { x[i] = lastX[i]; y[i] = lastY[i]; }
+        return lastCount; // preserve press/release state; never invent a release while busy
+    }
+    lastCount = 0;
     uint8_t d[CST9217_DATA_LEN2];
     if (!cst_read_reg(CST9217_REG_DATA, d, CST9217_DATA_LEN2)) return 0;
     if (d[6] != CST9217_ACK) return 0;
@@ -84,5 +95,7 @@ int touch_read_points(uint16_t x[2], uint16_t y[2]) {
     int n = 0;
     if (cst_unpack_point(d, &x[n], &y[n])) ++n;
     if (points >= 2 && cst_unpack_point(d + 7, &x[n], &y[n])) ++n;
+    lastCount = n;
+    for (int i = 0; i < n; ++i) { lastX[i] = x[i]; lastY[i] = y[i]; }
     return n;
 }

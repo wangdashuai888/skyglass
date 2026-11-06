@@ -2603,6 +2603,7 @@ sd_counters(&sdHit, &sdApp, &sdRdE);
         handleUpdateUpload);
     g_web.begin();
 
+    if (!gps_start() && gps_present()) FirmwareLog.println("[gps] failed to start background task");
     FirmwareLog.println("setup done");
 }
 
@@ -2644,7 +2645,6 @@ void loop() {
     powerTick();
     sleepTick();
 #endif
-    if (g_useGps) gps_poll();       // pull NMEA from the LC76G (only when GPS auto-location is on)
 
     // scheduled reboot after a fresh WiFi config (see setSaveConfigCallback)
 #if BOARD_HAS_SD
