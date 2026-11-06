@@ -1,7 +1,7 @@
 #pragma once
 // SkyGlass — build & user configuration.
 
-#define FW_VERSION "1.19.9"   // background GPS and automatic communication retries
+#define FW_VERSION "1.20"   // automatic GPS hardware reset recovery
 // ---------- Board selection ----------
 // Everything hardware-specific (screen geometry, pin map, which peripherals exist)
 // lives in src/boards/<board>.h. Pick one with a -D flag in platformio.ini; the

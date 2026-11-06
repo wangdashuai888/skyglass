@@ -22,6 +22,7 @@ static bool parser_has_fix();
 static uint32_t s_lastByteMs = 0;
 static bool s_received = false;
 static uint32_t s_recoveryAttempts = 0;
+static uint32_t s_resetAttempts = 0, s_resetSuccesses = 0;
 static void debugEvent(const char *message) {
     FirmwareLog.printf("[gps %lus] %s\n", (unsigned long)(millis() / 1000), message);
 }
@@ -128,10 +129,60 @@ int parser_satellites() {
 
 static const uint8_t QLEN[8] = { 0x08, 0x00, 0x51, 0xAA, 0x04, 0x00, 0x00, 0x00 };  // "how much is queued?"
 static GpsRetry s_retry;
+static GpsResetPolicy s_resetPolicy;
 static uint8_t s_recoveryReads = 0;
 
 static bool        s_present = false;
 static TinyGPSPlus s_gps;
+
+// Waveshare -G: TCA9554 (0x20) P7 -> LC76G RESET_N.
+// Reset is pulled up inside the LC76G to 1.8 V: drive LOW, then release
+// to input/high-impedance. Never drive a 3.3 V high onto the reset pin.
+static bool expanderRead(uint8_t reg, uint8_t &value) {
+    Wire.beginTransmission(0x20); Wire.write(reg);
+    if (Wire.endTransmission(false) != 0) return false;
+    if (Wire.requestFrom((uint8_t)0x20, (uint8_t)1) != 1) return false;
+    value = Wire.read();
+    return true;
+}
+static bool expanderWrite(uint8_t reg, uint8_t value) {
+    Wire.beginTransmission(0x20); Wire.write(reg); Wire.write(value);
+    return Wire.endTransmission() == 0;
+}
+static bool gpsResetPulse() {
+    // Caller owns the shared bus for the complete pulse/release sequence.
+    uint8_t config, output;
+    if (!expanderRead(3, config) || !expanderRead(1, output)) {
+        debugEvent("GPS_RST failed: cannot read TCA9554 registers");
+        return false;
+    }
+    // Preserve all seven unrelated pins. Set the output latch low before enabling output.
+    if (!expanderWrite(1, output & 0x7f)) {
+        debugEvent("GPS_RST failed: cannot prepare low output latch");
+        return false;
+    }
+    const bool asserted = expanderWrite(3, config & 0x7f);
+    // Even an uncertain ACK must be followed by release: the write may have reached the chip.
+    delay(150);
+    bool released = false;
+    for (int attempt = 0; attempt < 3 && !released; ++attempt) {
+        uint8_t verified;
+        released = expanderWrite(3, config | 0x80) &&
+                   expanderRead(3, verified) && verified == uint8_t(config | 0x80);
+        if (!released) delay(10);
+    }
+    if (released) expanderWrite(1, output); // harmless while P7 is high-impedance
+    if (!released) {
+        debugEvent("GPS_RST ERROR: release could not be verified; check receiver/reset state");
+        return false;
+    }
+    if (!asserted) {
+        debugEvent("GPS_RST: released safely, but low assertion was not acknowledged");
+        return false;
+    }
+    debugEvent("GPS_RST: 150ms low pulse complete; reset pin released to input");
+    return true;
+}
 
 // One blocking, uninterrupted drain of up to GPS_READ_MAX bytes into the parser.
 // Returns bytes read (0 if nothing queued or a step failed). Caller has set 100 kHz + long timeout.
@@ -213,6 +264,7 @@ bool parser_begin() {
     FirmwareLog.printf("[gps] LC76G %s\n", s_present ? "detected on I2C" : "not present");
     debugEvent(s_present ? "LC76G detected on I2C" : "LC76G not detected on I2C");
     s_retry.start(millis());
+    s_resetPolicy.start(millis());
     return s_present;
 }
 
@@ -227,6 +279,25 @@ void parser_poll() {
     if (last != 0 && now - last < GPS_POLL_MS) return;
     last = now;
 
+    if (s_resetPolicy.due(now)) {
+        s_resetPolicy.attempted(now);
+        ++s_resetAttempts;
+        FirmwareLog.printf("[gps %lus] GPS_RST attempt %lu: no valid NMEA for 30s (60s reset cooldown)\n",
+            (unsigned long)(now / 1000), (unsigned long)s_resetAttempts);
+        Wire.setClock(GPS_I2C_HZ); Wire.setTimeOut(BUS_TIMEOUT_MS);
+        const bool resetOk = gpsResetPulse();
+        Wire.setTimeOut(BUS_TIMEOUT_MS); Wire.setClock(GPS_BUS_HZ);
+        if (resetOk) {
+            ++s_resetSuccesses;
+            s_gps = TinyGPSPlus(); // discard pre-reset partial sentences and stale position
+            s_received = false; s_lastByteMs = 0;
+            s_recoveryReads = 0;
+            s_retry.start(millis());
+        }
+        // Give the receiver until the next one-second poll to restart; UI task stays free.
+        last = millis();
+        return;
+    }
     if (s_retry.due(now)) {
         s_retry.attempted(now);
         ++s_recoveryAttempts;
@@ -240,6 +311,7 @@ void parser_poll() {
     Wire.setTimeOut(BUS_TIMEOUT_MS); Wire.setClock(GPS_BUS_HZ);   // hand the shared bus back to touch/IMU/RTC/PMIC
     if (s_gps.passedChecksum() != validBefore) {
         s_retry.received(millis());
+        s_resetPolicy.received(millis());
         if (s_recoveryReads) debugEvent("valid NMEA resumed; returning to normal 1-second reads");
         s_recoveryReads = 0;
     } else if (s_recoveryReads) {
@@ -281,6 +353,7 @@ struct GpsSnapshot {
     bool present = false, valid = false, received = false;
     uint32_t captured = 0, positionAge = UINT32_MAX, lastByte = 0;
     uint32_t chars = 0, passed = 0, failed = 0, fixes = 0, retries = 0;
+    uint32_t resets = 0, resetPulses = 0;
     int satellites = 0;
     double lat = 0, lon = 0;
 };
@@ -299,6 +372,7 @@ static void publishSnapshot() {
     next.chars = s_gps.charsProcessed(); next.passed = s_gps.passedChecksum();
     next.failed = s_gps.failedChecksum(); next.fixes = s_gps.sentencesWithFix();
     next.retries = s_recoveryAttempts;
+    next.resets = s_resetAttempts; next.resetPulses = s_resetSuccesses;
     next.satellites = parser_satellites();
     next.lat = s_gps.location.lat(); next.lon = s_gps.location.lng();
     portENTER_CRITICAL(&s_snapshotMux);
@@ -362,5 +436,6 @@ String gps_debug_snapshot() {
         (unsigned long)s.fixes, s.satellites, s.received ? "yes" : "no",
         s.received ? (unsigned long)(millis() - s.lastByte) : 0UL,
         (unsigned long long)positionAge(s), s.lat, s.lon, (unsigned long)s.retries);
-    return String(stats);
+    return String(stats) + "GPS_RST attempts: " + String(s.resets) +
+           " | completed pulses: " + String(s.resetPulses) + "\n";
 }

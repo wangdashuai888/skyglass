@@ -14,3 +14,16 @@ public:
     }
     void attempted(uint32_t now) { lastAttempt_ = now; attempted_ = true; }
 };
+
+class GpsResetPolicy {
+    uint32_t lastValid_ = 0, lastReset_ = 0;
+    bool attempted_ = false;
+public:
+    void start(uint32_t now) { lastValid_ = now; attempted_ = false; }
+    void received(uint32_t now) { lastValid_ = now; }
+    bool due(uint32_t now) const {
+        return uint32_t(now - lastValid_) >= 30000 &&
+               (!attempted_ || uint32_t(now - lastReset_) >= 60000);
+    }
+    void attempted(uint32_t now) { lastReset_ = now; attempted_ = true; }
+};
